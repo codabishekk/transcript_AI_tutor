@@ -1,15 +1,15 @@
-# AI YouTube Tutor 🚀
+# AI YouTube Tutor 
 
 AI YouTube Tutor is a powerful web application that allows users to interact with any YouTube video using AI. By simply pasting a YouTube URL, the app extracts the transcript, processes it using a RAG (Retrieval-Augmented Generation) pipeline, and enables you to ask questions about the video's content.
 
-## ✨ Features
+##  Features
 
 - **Instant Transcript Processing**: Provide a YouTube URL and get the full content indexed in seconds.
 - **AI-Powered Q&A**: Ask complex questions about the video and get accurate, context-aware answers.
 - **RAG Architecture**: Uses Retrieval-Augmented Generation for factually grounded responses.
 - **Modern UI**: Sleek, responsive interface built with React and custom CSS.
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 ### Backend
 - **Framework**: Flask (Python)
@@ -24,7 +24,7 @@ AI YouTube Tutor is a powerful web application that allows users to interact wit
 - **Styling**: Vanilla CSS
 - **API Client**: Axios
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### Prerequisites
 - Python 3.12+
@@ -61,11 +61,11 @@ AI YouTube Tutor is a powerful web application that allows users to interact wit
    ```
    The frontend will start at `http://localhost:5173`.
 
-## 📖 Usage
+##  Usage
 1. Paste a YouTube video URL into the top input field.
-2. Click **🚀 Process** to let the AI analyze the video.
+2. Click **Process** to let the AI analyze the video.
 3. Once processed, type your question in the second input field.
-4. Click **💡 Ask AI** to get your answer!
+4. Click **Ask AI** to get your answer!
 
-## 📄 License
+## License
 MIT
