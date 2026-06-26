@@ -1,0 +1,14 @@
+langgraph
+langchain
+langchain-core
+langchain-community
+pytube
+python-dotenv
+google-generativeai
+langchain-google-genai
+faiss-cpu
+langchain-openai
+langchain-text-splitters
+flask
+flask-cors
+youtube-transcript-api
