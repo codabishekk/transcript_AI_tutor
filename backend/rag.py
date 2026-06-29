@@ -36,17 +36,34 @@ def get_transcript(url):
 
 
     try:
-        # Try to fetch English transcript first, then fallback to others
-        try:
-            transcript = youtube_transcript_api.YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
-        except Exception:
-            # If English fails, let the library choose the best available one
-            transcript = youtube_transcript_api.YouTubeTranscriptApi.get_transcript(video_id)
-            
+        # Use plurality of checks to find the right method
+        api_class = getattr(youtube_transcript_api, 'YouTubeTranscriptApi', None)
+        if api_class is None:
+             raise ValueError(f"Could not find YouTubeTranscriptApi class in module. Available: {dir(youtube_transcript_api)}")
+        
+        # Determine the correct method name (sometimes it is list_transcripts, sometimes get_transcript)
+        method_name = 'get_transcript' if hasattr(api_class, 'get_transcript') else 'list_transcripts'
+        method = getattr(api_class, method_name)
+
+        if method_name == 'get_transcript':
+            try:
+                transcript = method(video_id, languages=['en'])
+            except Exception:
+                transcript = method(video_id)
+        else:
+            # Fallback to list_transcripts logic if that's what's available
+            transcript_list = method(video_id)
+            try:
+                transcript = transcript_list.find_transcript(['en']).fetch()
+            except Exception:
+                transcript = next(iter(transcript_list)).fetch()
+
     except Exception as e:
-        if "No transcripts are available" in str(e):
-             raise ValueError("This video does not have any transcripts available.")
-        raise ValueError(f"Could not fetch transcript: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        available_methods = dir(getattr(youtube_transcript_api, 'YouTubeTranscriptApi', youtube_transcript_api))
+        raise ValueError(f"Transcript Error: {str(e)}. Methods found: {available_methods}")
+
 
 
 

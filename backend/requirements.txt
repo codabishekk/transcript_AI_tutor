@@ -11,6 +11,7 @@ langchain-openai
 langchain-text-splitters
 flask
 flask-cors
-youtube-transcript-api
+youtube-transcript-api==0.6.1
+
 gunicorn
 langchain-classic
