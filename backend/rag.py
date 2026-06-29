@@ -26,10 +26,13 @@ qa_chain = None
 
 
 def get_transcript(url):
-    try:
-        video_id = YouTube(url).video_id
-    except Exception:
+    import re
+    # Extract video ID using regex (more reliable than pytube)
+    match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", url)
+    if not match:
         raise ValueError("Invalid YouTube URL. Please check the link.")
+    video_id = match.group(1)
+
 
     try:
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
@@ -92,8 +95,9 @@ def process_video(url):
     retriever = vector_store.as_retriever()
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-3-flash-preview"
+        model="gemini-1.5-flash"
     )
+
 
     qa_chain = RetrievalQA.from_chain_type(
         llm=llm,
