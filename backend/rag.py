@@ -15,7 +15,10 @@ from langchain_google_genai import (
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import CharacterTextSplitter
-from langchain.chains import RetrievalQA
+try:
+    from langchain.chains import RetrievalQA
+except ModuleNotFoundError:
+    from langchain_classic.chains import RetrievalQA
 
 
 google_api_key = os.getenv("GOOGLE_API_KEY")
