@@ -16,7 +16,10 @@ from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import CharacterTextSplitter
 from langchain.chains import RetrievalQA
 
-os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
+google_api_key = os.getenv("GOOGLE_API_KEY")
+if google_api_key:
+    os.environ["GOOGLE_API_KEY"] = google_api_key
+
 
 qa_chain = None
 
