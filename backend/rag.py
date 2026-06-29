@@ -36,23 +36,27 @@ def get_transcript(url):
 
 
     try:
+        # Check if cookies.txt exists to bypass 429 blocks
+        cookie_path = os.path.join(os.path.dirname(__file__), 'cookies.txt')
+        cookies = cookie_path if os.path.exists(cookie_path) else None
+        
         # Use plurality of checks to find the right method
         api_class = getattr(youtube_transcript_api, 'YouTubeTranscriptApi', None)
         if api_class is None:
-             raise ValueError(f"Could not find YouTubeTranscriptApi class in module. Available: {dir(youtube_transcript_api)}")
+             raise ValueError(f"Could not find YouTubeTranscriptApi class in module.")
         
-        # Determine the correct method name (sometimes it is list_transcripts, sometimes get_transcript)
+        # Determine the correct method name 
         method_name = 'get_transcript' if hasattr(api_class, 'get_transcript') else 'list_transcripts'
         method = getattr(api_class, method_name)
 
         if method_name == 'get_transcript':
             try:
-                transcript = method(video_id, languages=['en'])
+                transcript = method(video_id, languages=['en'], cookies=cookies)
             except Exception:
-                transcript = method(video_id)
+                transcript = method(video_id, cookies=cookies)
         else:
-            # Fallback to list_transcripts logic if that's what's available
-            transcript_list = method(video_id)
+            # Fallback to list_transcripts logic
+            transcript_list = method(video_id, cookies=cookies)
             try:
                 transcript = transcript_list.find_transcript(['en']).fetch()
             except Exception:
@@ -60,9 +64,11 @@ def get_transcript(url):
 
     except Exception as e:
         import traceback
-        print(traceback.format_exc())
-        available_methods = dir(getattr(youtube_transcript_api, 'YouTubeTranscriptApi', youtube_transcript_api))
-        raise ValueError(f"Transcript Error: {str(e)}. Methods found: {available_methods}")
+        error_msg = str(e)
+        if "429" in error_msg:
+            error_msg = "YouTube blocked the server (429). Please add a 'cookies.txt' file to the backend folder."
+        raise ValueError(f"Transcript Error: {error_msg}")
+
 
 
 
