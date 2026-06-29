@@ -4,7 +4,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from pytube import YouTube
-from youtube_transcript_api import YouTubeTranscriptApi
+import youtube_transcript_api
+
 
 from langchain_google_genai import (
     GoogleGenerativeAIEmbeddings,
@@ -37,15 +38,16 @@ def get_transcript(url):
     try:
         # Try to fetch English transcript first, then fallback to others
         try:
-            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
+            transcript = youtube_transcript_api.YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
         except Exception:
             # If English fails, let the library choose the best available one
-            transcript = YouTubeTranscriptApi.get_transcript(video_id)
+            transcript = youtube_transcript_api.YouTubeTranscriptApi.get_transcript(video_id)
             
     except Exception as e:
         if "No transcripts are available" in str(e):
              raise ValueError("This video does not have any transcripts available.")
         raise ValueError(f"Could not fetch transcript: {str(e)}")
+
 
 
     text = " ".join([item.text for item in transcript])
