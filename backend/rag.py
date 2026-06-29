@@ -14,7 +14,8 @@ from langchain_google_genai import (
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import CharacterTextSplitter
-from langchain.chains import RetrievalQA
+from langchain_classic.chains import RetrievalQA
+
 
 google_api_key = os.getenv("GOOGLE_API_KEY")
 if google_api_key:
@@ -31,8 +32,8 @@ def get_transcript(url):
         raise ValueError("Invalid YouTube URL. Please check the link.")
 
     try:
-        api = YouTubeTranscriptApi()
-        transcript_list = api.list(video_id)
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+
         
         # Try to find English first, fallback to any available language
         try:
