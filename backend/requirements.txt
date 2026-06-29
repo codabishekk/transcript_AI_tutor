@@ -12,3 +12,4 @@ langchain-text-splitters
 flask
 flask-cors
 youtube-transcript-api
+gunicorn
