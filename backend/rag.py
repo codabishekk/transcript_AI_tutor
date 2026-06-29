@@ -35,24 +35,18 @@ def get_transcript(url):
 
 
     try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-
-        
-        # Try to find English first, fallback to any available language
+        # Try to fetch English transcript first, then fallback to others
         try:
-            transcript_obj = transcript_list.find_transcript(['en'])
+            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
         except Exception:
-            # If English is not found, take the first available transcript
-            try:
-                transcript_obj = next(iter(transcript_list))
-            except StopIteration:
-                raise ValueError("No transcripts are available for this video.")
-        
-        transcript = transcript_obj.fetch()
+            # If English fails, let the library choose the best available one
+            transcript = YouTubeTranscriptApi.get_transcript(video_id)
+            
     except Exception as e:
         if "No transcripts are available" in str(e):
-             raise ValueError(str(e))
+             raise ValueError("This video does not have any transcripts available.")
         raise ValueError(f"Could not fetch transcript: {str(e)}")
+
 
     text = " ".join([item.text for item in transcript])
 
