@@ -84,8 +84,10 @@ def process_video(url):
         raise ValueError("Could not split transcript into any documents.")
 
     embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/gemini-embedding-001"
+        model="models/gemini-embedding-001",
+        google_api_key=google_api_key
     )
+
 
     vector_store = FAISS.from_documents(
         documents,
@@ -95,8 +97,10 @@ def process_video(url):
     retriever = vector_store.as_retriever()
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash"
+        model="gemini-1.5-flash",
+        google_api_key=google_api_key
     )
+
 
 
     qa_chain = RetrievalQA.from_chain_type(

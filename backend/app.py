@@ -21,8 +21,13 @@ def process():
         return jsonify({"message": "Transcript processed successfully"})
     except Exception as e:
         import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(error_details)
+        return jsonify({
+            "error": str(e),
+            "traceback": error_details
+        }), 500
+
 
 
 @app.route("/ask", methods=["POST"])
@@ -36,8 +41,13 @@ def ask():
         return jsonify({"answer": answer})
     except Exception as e:
         import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(error_details)
+        return jsonify({
+            "error": str(e),
+            "traceback": error_details
+        }), 500
+
 
 
 if __name__ == "__main__":
