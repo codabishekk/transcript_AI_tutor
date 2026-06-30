@@ -1,7 +1,11 @@
 import os
+import warnings
+
+warnings.filterwarnings("ignore", category=FutureWarning, module="langchain_google_genai.*")
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai.*")
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-
 from rag import process_video, ask_question
 
 app = Flask(__name__)

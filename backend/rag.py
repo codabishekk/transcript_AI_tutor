@@ -1,4 +1,8 @@
 import os
+import warnings
+
+warnings.filterwarnings("ignore", category=FutureWarning, module="langchain_google_genai.*")
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai.*")
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -13,12 +17,9 @@ from langchain_google_genai import (
 )
 
 from langchain_community.vectorstores import FAISS
-from langchain_community.document_loaders import TextLoader
-from langchain_text_splitters import CharacterTextSplitter
-try:
-    from langchain.chains import RetrievalQA
-except ModuleNotFoundError:
-    from langchain_classic.chains import RetrievalQA
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains.retrieval import create_retrieval_chain
+from langchain_core.prompts import ChatPromptTemplate
 
 
 google_api_key = os.getenv("GOOGLE_API_KEY")
@@ -31,50 +32,17 @@ qa_chain = None
 
 def get_transcript(url):
     import re
-    # Extract video ID using regex (more reliable than pytube)
     match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", url)
     if not match:
         raise ValueError("Invalid YouTube URL. Please check the link.")
     video_id = match.group(1)
 
-
     try:
-        # Check if cookies.txt exists to bypass 429 blocks
-        cookie_path = os.path.join(os.path.dirname(__file__), 'cookies.txt')
-        cookies = cookie_path if os.path.exists(cookie_path) else None
-        
-        # Use plurality of checks to find the right method
-        api_class = getattr(youtube_transcript_api, 'YouTubeTranscriptApi', None)
-        if api_class is None:
-             raise ValueError(f"Could not find YouTubeTranscriptApi class in module.")
-        
-        # Determine the correct method name 
-        method_name = 'get_transcript' if hasattr(api_class, 'get_transcript') else 'list_transcripts'
-        method = getattr(api_class, method_name)
-
-        if method_name == 'get_transcript':
-            try:
-                transcript = method(video_id, languages=['en'], cookies=cookies)
-            except Exception:
-                transcript = method(video_id, cookies=cookies)
-        else:
-            # Fallback to list_transcripts logic
-            transcript_list = method(video_id, cookies=cookies)
-            try:
-                transcript = transcript_list.find_transcript(['en']).fetch()
-            except Exception:
-                transcript = next(iter(transcript_list)).fetch()
-
+        api = youtube_transcript_api.YouTubeTranscriptApi()
+        transcript = api.fetch(video_id, languages=['en'])
     except Exception as e:
-        import traceback
         error_msg = str(e)
-        if "429" in error_msg:
-            error_msg = "YouTube blocked the server (429). Please add a 'cookies.txt' file to the backend folder."
         raise ValueError(f"Transcript Error: {error_msg}")
-
-
-
-
 
     text = " ".join([item.text for item in transcript])
 
@@ -125,11 +93,12 @@ def process_video(url):
 
 
 
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        retriever=retriever,
-        chain_type="stuff"
+    prompt = ChatPromptTemplate.from_template(
+        "Use the following context to answer the question. "
+        "If you don't know, say so.\n\nContext: {context}\n\nQuestion: {input}"
     )
+    combine_docs_chain = create_stuff_documents_chain(llm, prompt)
+    qa_chain = create_retrieval_chain(retriever, combine_docs_chain)
 
 
 def ask_question(question):
@@ -139,4 +108,5 @@ def ask_question(question):
     if qa_chain is None:
         return "Please process a YouTube video first."
 
-    return qa_chain.run(question)
+    result = qa_chain.invoke({"input": question})
+    return result["answer"]
