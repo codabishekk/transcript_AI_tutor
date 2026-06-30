@@ -36,9 +36,20 @@ def get_transcript(url):
         raise ValueError("Invalid YouTube URL. Please check the link.")
     video_id = match.group(1)
 
+    cookies = None
+    cookie_path = os.path.join(os.path.dirname(__file__), 'cookies.txt')
+    if os.path.exists(cookie_path):
+        cookies = cookie_path
+
+    proxy = os.getenv("YOUTUBE_PROXY")
+    if proxy:
+        os.environ["HTTP_PROXY"] = proxy
+        os.environ["HTTPS_PROXY"] = proxy
+
     try:
-        api = youtube_transcript_api.YouTubeTranscriptApi()
-        transcript = api.fetch(video_id, languages=['en'])
+        transcript = youtube_transcript_api.YouTubeTranscriptApi.get_transcript(
+            video_id, languages=['en'], cookies=cookies
+        )
     except Exception as e:
         error_msg = str(e)
         raise ValueError(f"Transcript Error: {error_msg}")
