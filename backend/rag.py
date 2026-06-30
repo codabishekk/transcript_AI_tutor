@@ -7,7 +7,6 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="google.generat
 from dotenv import load_dotenv
 load_dotenv()
 
-from pytube import YouTube
 import youtube_transcript_api
 
 
