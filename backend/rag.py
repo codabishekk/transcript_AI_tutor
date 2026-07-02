@@ -47,8 +47,9 @@ def get_transcript(url):
         os.environ["HTTPS_PROXY"] = proxy
 
     try:
-        transcript = youtube_transcript_api.YouTubeTranscriptApi.get_transcript(
-            video_id, languages=['en'], cookies=cookies
+        api = youtube_transcript_api.YouTubeTranscriptApi()
+        transcript = api.fetch(
+            video_id, languages=['en']
         )
     except Exception as e:
         error_msg = str(e)
@@ -97,7 +98,7 @@ def process_video(url):
     retriever = vector_store.as_retriever()
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash",
         google_api_key=google_api_key
     )
 
