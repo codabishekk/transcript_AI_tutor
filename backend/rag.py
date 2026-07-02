@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import youtube_transcript_api
+from youtube_transcript_api.proxies import GenericProxyConfig
 
 
 from langchain_google_genai import (
@@ -41,13 +42,13 @@ def get_transcript(url):
     if os.path.exists(cookie_path):
         cookies = cookie_path
 
+    proxy_config = None
     proxy = os.getenv("YOUTUBE_PROXY")
     if proxy:
-        os.environ["HTTP_PROXY"] = proxy
-        os.environ["HTTPS_PROXY"] = proxy
+        proxy_config = GenericProxyConfig(http_url=proxy, https_url=proxy)
 
     try:
-        api = youtube_transcript_api.YouTubeTranscriptApi()
+        api = youtube_transcript_api.YouTubeTranscriptApi(proxy_config=proxy_config)
         transcript = api.fetch(
             video_id, languages=['en']
         )
