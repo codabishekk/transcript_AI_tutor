@@ -1,5 +1,6 @@
 import { useState } from "react";
 import axios from "axios";
+import { fetchTranscript } from "youtube-transcript";
 import Header from "./components/Header";
 import InputSection from "./components/InputSection";
 import StatusToast from "./components/StatusToast";
@@ -28,13 +29,15 @@ function App() {
     setAnswer("");
 
     try {
-      const res = await api.post("/process", { url });
+      const snippets = await fetchTranscript(url);
+      const transcript = snippets.map((s) => s.text).join(" ");
+      const res = await api.post("/process", { url, transcript });
       setStatus({ type: "success", message: res.data.message || "Video processed successfully!" });
     } catch (err) {
       console.error(err);
       setStatus({
         type: "error",
-        message: err.message || err.response?.data?.error || "Failed to process video. Please check the URL.",
+        message: err.response?.data?.error || err.message || "Failed to process video. Please check the URL.",
       });
     } finally {
       setIsProcessing(false);
