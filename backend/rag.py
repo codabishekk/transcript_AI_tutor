@@ -1,14 +1,7 @@
 import os
-import warnings
-
-warnings.filterwarnings("ignore", category=FutureWarning, module="langchain_google_genai.*")
-warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai.*")
 
 from dotenv import load_dotenv
 load_dotenv()
-
-import youtube_transcript_api
-from youtube_transcript_api.proxies import GenericProxyConfig
 
 
 from langchain_google_genai import (
@@ -17,79 +10,36 @@ from langchain_google_genai import (
 )
 
 from langchain_community.vectorstores import FAISS
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains.retrieval import create_retrieval_chain
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_community.document_loaders import TextLoader
+from langchain_text_splitters import CharacterTextSplitter
+from langchain.chains import RetrievalQA
 
-
-google_api_key = os.getenv("GOOGLE_API_KEY")
-if google_api_key:
-    os.environ["GOOGLE_API_KEY"] = google_api_key
-
+os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
 
 qa_chain = None
 
 
-def get_transcript(url):
-    import re
-    match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", url)
-    if not match:
-        raise ValueError("Invalid YouTube URL. Please check the link.")
-    video_id = match.group(1)
-
-    cookies = None
-    cookie_path = os.path.join(os.path.dirname(__file__), 'cookies.txt')
-    if os.path.exists(cookie_path):
-        cookies = cookie_path
-
-    proxy_config = None
-    proxy = os.getenv("YOUTUBE_PROXY")
-    if proxy:
-        proxy_config = GenericProxyConfig(http_url=proxy, https_url=proxy)
-
-    try:
-        api = youtube_transcript_api.YouTubeTranscriptApi(proxy_config=proxy_config)
-        transcript = api.fetch(
-            video_id, languages=['en']
-        )
-    except Exception as e:
-        error_msg = str(e)
-        raise ValueError(f"Transcript Error: {error_msg}")
-
-    text = " ".join([item.text for item in transcript])
-
-    if not text.strip():
-        raise ValueError("The video has an empty transcript.")
-
-    return text
-
-
-def process_video(url):
+def process_video(url, transcript):
 
     global qa_chain
 
-    transcript = get_transcript(url)
+    with open("transcript.txt", "w", encoding="utf-8") as f:
+        f.write(transcript)
 
-    from langchain_core.documents import Document
-    docs = [Document(page_content=transcript)]
+    loader = TextLoader("transcript.txt")
 
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-    splitter = RecursiveCharacterTextSplitter(
+    docs = loader.load()
+
+    splitter = CharacterTextSplitter(
         chunk_size=1000,
-        chunk_overlap=200,
-        separators=["\n\n", "\n", " ", ""]
+        chunk_overlap=200
     )
 
     documents = splitter.split_documents(docs)
-    
-    if not documents:
-        raise ValueError("Could not split transcript into any documents.")
 
     embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/gemini-embedding-001",
-        google_api_key=google_api_key
+        model="models/gemini-embedding-001"
     )
-
 
     vector_store = FAISS.from_documents(
         documents,
@@ -99,18 +49,14 @@ def process_video(url):
     retriever = vector_store.as_retriever()
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        google_api_key=google_api_key
+        model="gemini-2.0-flash"
     )
 
-
-
-    prompt = ChatPromptTemplate.from_template(
-        "Use the following context to answer the question. "
-        "If you don't know, say so.\n\nContext: {context}\n\nQuestion: {input}"
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        retriever=retriever,
+        chain_type="stuff"
     )
-    combine_docs_chain = create_stuff_documents_chain(llm, prompt)
-    qa_chain = create_retrieval_chain(retriever, combine_docs_chain)
 
 
 def ask_question(question):
@@ -120,5 +66,4 @@ def ask_question(question):
     if qa_chain is None:
         return "Please process a YouTube video first."
 
-    result = qa_chain.invoke({"input": question})
-    return result["answer"]
+    return qa_chain.run(question)

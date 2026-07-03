@@ -34,7 +34,7 @@ function App() {
       console.error(err);
       setStatus({
         type: "error",
-        message: err.response?.data?.error || "Failed to process video. Please check the URL.",
+        message: err.message || err.response?.data?.error || "Failed to process video. Please check the URL.",
       });
     } finally {
       setIsProcessing(false);
