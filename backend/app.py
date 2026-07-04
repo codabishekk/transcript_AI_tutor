@@ -5,7 +5,6 @@ import tempfile
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import yt_dlp
-from youtube_transcript_api import YouTubeTranscriptApi
 
 from rag import process_video, ask_question
 
@@ -78,39 +77,34 @@ def fetch_transcript_ytdlp(video_id, cookiefile=None):
 
 
 def fetch_transcript(video_id):
+    cookie_b64 = os.getenv("YT_DLP_COOKIES_BASE64")
+    cookie_text = os.getenv("YT_DLP_COOKIES_TEXT")
+    cookie_file = None
+
+    if cookie_b64:
+        cookie_file = write_temp_cookies_from_base64(cookie_b64)
+    elif cookie_text:
+        cookie_file = write_temp_cookies_from_text(cookie_text)
+
     try:
-        transcript_items = YouTubeTranscriptApi.get_transcript(video_id, languages=["en"])
-        transcript = " ".join(item["text"] for item in transcript_items)
-        return re.sub(r"\s+", " ", transcript).strip()
-    except Exception:
-        cookie_b64 = os.getenv("YT_DLP_COOKIES_BASE64")
-        cookie_text = os.getenv("YT_DLP_COOKIES_TEXT")
-        cookie_file = None
-
-        if cookie_b64:
-            cookie_file = write_temp_cookies_from_base64(cookie_b64)
-        elif cookie_text:
-            cookie_file = write_temp_cookies_from_text(cookie_text)
-
-        try:
-            return fetch_transcript_ytdlp(video_id, cookiefile=cookie_file)
-        except Exception as yt_error:
-            cookie_path = resolve_cookiefile_path()
-            if cookie_path and os.path.isfile(cookie_path) and os.path.getsize(cookie_path) > 0:
-                raise Exception(
-                    f"Failed to fetch transcript using yt-dlp with cookies at {cookie_path}. "
-                    "Make sure the file contains valid YouTube session cookies. "
-                    "See https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies"
-                ) from yt_error
+        return fetch_transcript_ytdlp(video_id, cookiefile=cookie_file)
+    except Exception as yt_error:
+        cookie_path = resolve_cookiefile_path()
+        if cookie_path and os.path.isfile(cookie_path) and os.path.getsize(cookie_path) > 0:
             raise Exception(
-                "Failed to fetch transcript. Some YouTube videos require authentication. "
-                "Export YouTube cookies to backend/cookies.txt or set YT_DLP_COOKIES_FILE or YT_DLP_COOKIES_TEXT. "
-                "You can also set YT_DLP_COOKIES_BASE64 with base64-encoded cookies content. "
-                "See https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
+                f"Failed to fetch transcript using yt-dlp with cookies at {cookie_path}. "
+                "Make sure the file contains valid YouTube session cookies. "
+                "See https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies"
             ) from yt_error
-        finally:
-            if cookie_file and os.path.isfile(cookie_file):
-                os.remove(cookie_file)
+        raise Exception(
+            "Failed to fetch transcript. Some YouTube videos require authentication. "
+            "Export YouTube cookies to backend/cookies.txt or set YT_DLP_COOKIES_FILE or YT_DLP_COOKIES_TEXT. "
+            "You can also set YT_DLP_COOKIES_BASE64 with base64-encoded cookies content. "
+            "See https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
+        ) from yt_error
+    finally:
+        if cookie_file and os.path.isfile(cookie_file):
+            os.remove(cookie_file)
 
 @app.route("/process", methods=["POST"])
 def process():
@@ -145,11 +139,11 @@ def ask():
     if not question:
         return jsonify({"error": "Question required"}), 400
 
-    answer = ask_question(question)
-
-    return jsonify({
-        "answer": answer
-    })
+    try:
+        answer = ask_question(question)
+        return jsonify({"answer": answer})
+    except Exception as e:
+        return jsonify({"error": f"Failed to generate answer: {str(e)}"}), 500
 
 
 if __name__ == "__main__":

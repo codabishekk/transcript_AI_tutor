@@ -1,4 +1,5 @@
 import os
+import time
 import numpy as np
 import faiss
 import requests
@@ -35,18 +36,33 @@ def _get_api_key():
     return api_key
 
 
+def _request_with_retry(method, url, max_retries=3, **kwargs):
+    """Make an HTTP request with exponential backoff on 429 errors."""
+    for attempt in range(max_retries):
+        response = method(url, **kwargs)
+        if response.status_code == 429 and attempt < max_retries - 1:
+            wait_time = 2 ** attempt * 5  # 5s, 10s, 20s
+            print(f"Rate limited (429). Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})...")
+            time.sleep(wait_time)
+            continue
+        response.raise_for_status()
+        return response
+    response.raise_for_status()
+    return response
+
+
 def _embed_text(text):
     api_key = _get_api_key()
     payload = {
         "model": "models/gemini-embedding-001",
         "content": {"parts": [{"text": text}]},
     }
-    response = requests.post(
+    response = _request_with_retry(
+        requests.post,
         f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key={api_key}",
         json=payload,
         timeout=60,
     )
-    response.raise_for_status()
     data = response.json()
     return np.array(data["embedding"]["values"], dtype="float32")
 
@@ -54,12 +70,12 @@ def _embed_text(text):
 def _generate_answer(prompt):
     api_key = _get_api_key()
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    response = requests.post(
+    response = _request_with_retry(
+        requests.post,
         f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
         json=payload,
         timeout=60,
     )
-    response.raise_for_status()
     data = response.json()
     candidates = data.get("candidates", [])
     if not candidates:
