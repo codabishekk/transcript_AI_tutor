@@ -8,6 +8,7 @@ import ResultPanel from "./components/ResultPanel";
 
 function App() {
   const [url, setUrl] = useState("");
+  const [transcript, setTranscript] = useState("");
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -19,8 +20,8 @@ function App() {
   });
 
   const processVideo = async () => {
-    if (!url) {
-      setStatus({ type: "error", message: "Please paste a YouTube URL first!" });
+    if (!url && !transcript) {
+      setStatus({ type: "error", message: "Please provide a YouTube URL or paste a transcript!" });
       return;
     }
 
@@ -29,7 +30,7 @@ function App() {
     setAnswer("");
 
     try {
-      const res = await api.post("/process", { url });
+      const res = await api.post("/process", { url, transcript });
       setStatus({ type: "success", message: res.data.message || "Video processed successfully!" });
     } catch (err) {
       console.error(err);
@@ -76,6 +77,8 @@ function App() {
         <InputSection
           url={url}
           setUrl={setUrl}
+          transcript={transcript}
+          setTranscript={setTranscript}
           question={question}
           setQuestion={setQuestion}
           processVideo={processVideo}

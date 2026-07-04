@@ -7,6 +7,9 @@ The AI YouTube Tutor backend is a Flask-based REST API that powers the applicati
 
 ##Features
 Fetch YouTube video transcripts
+- Uses `youtube-transcript-api` first for public transcripts
+- Falls back to `yt-dlp` when YouTube requires authentication
+- Supports cookies via `backend/cookies.txt`, `YT_DLP_COOKIES_FILE`, `YT_DLP_COOKIES_TEXT`, or `YT_DLP_COOKIES_BASE64`
 Generate embeddings using Google Gemini
 Store embeddings in a FAISS vector database
 Retrieval-Augmented Generation (RAG)

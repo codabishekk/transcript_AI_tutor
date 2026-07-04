@@ -27,6 +27,17 @@ function InputSection({ isProcessing, isAsking, ...props }) {
       </div>
 
       <div className="input-card">
+        <span className="input-card__label">Transcript (optional)</span>
+        <textarea
+          rows={6}
+          placeholder="Paste the transcript here if the video is protected or cookies are required."
+          value={props.transcript}
+          onChange={(e) => props.setTranscript(e.target.value)}
+          disabled={isProcessing}
+        />
+      </div>
+
+      <div className="input-card">
         <span className="input-card__label">Ask a Question</span>
         <div className="input-card__row">
           <input
