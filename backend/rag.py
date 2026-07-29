@@ -1,10 +1,10 @@
 import os
 import time
 import numpy as np
-import faiss
 import requests
 
 from dotenv import load_dotenv
+from fastembed import TextEmbedding
 
 load_dotenv()
 
@@ -30,18 +30,20 @@ def _chunk_text(text, chunk_size=1000, chunk_overlap=200):
 
 
 def _get_api_key():
-    api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("GOOGLE_API_KEY is not set. Configure it in your environment before processing a video.")
+        # Fallback to GOOGLE_API_KEY for backward compatibility
+        api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is not set. Configure it in your environment before processing a video.")
     return api_key
 
 
 def _request_with_retry(method, url, max_retries=3, **kwargs):
-    """Make an HTTP request with exponential backoff on 429 errors."""
     for attempt in range(max_retries):
         response = method(url, **kwargs)
         if response.status_code == 429 and attempt < max_retries - 1:
-            wait_time = 2 ** attempt * 5  # 5s, 10s, 20s
+            wait_time = 2 ** attempt * 5
             print(f"Rate limited (429). Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})...")
             time.sleep(wait_time)
             continue
@@ -51,38 +53,42 @@ def _request_with_retry(method, url, max_retries=3, **kwargs):
     return response
 
 
+_model = None
+
+
+def _get_model():
+    global _model
+    if _model is None:
+        _model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    return _model
+
+
 def _embed_text(text):
-    api_key = _get_api_key()
-    payload = {
-        "model": "models/gemini-embedding-001",
-        "content": {"parts": [{"text": text}]},
-    }
-    response = _request_with_retry(
-        requests.post,
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key={api_key}",
-        json=payload,
-        timeout=60,
-    )
-    data = response.json()
-    return np.array(data["embedding"]["values"], dtype="float32")
+    model = _get_model()
+    embedding = next(model.embed(text))
+    return np.array(embedding, dtype="float32")
 
 
 def _generate_answer(prompt):
     api_key = _get_api_key()
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    payload = {
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "messages": [{"role": "user", "content": prompt}],
+    }
     response = _request_with_retry(
         requests.post,
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
+        "https://openrouter.ai/api/v1/chat/completions",
         json=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+        },
         timeout=60,
     )
     data = response.json()
-    candidates = data.get("candidates", [])
-    if not candidates:
+    choices = data.get("choices", [])
+    if not choices:
         return "No answer generated."
-    parts = candidates[0].get("content", {}).get("parts", [])
-    text = parts[0].get("text", "") if parts else ""
-    return text.strip() or "No answer generated."
+    return choices[0].get("message", {}).get("content", "").strip() or "No answer generated."
 
 
 def process_video(url, transcript):
@@ -100,12 +106,9 @@ def process_video(url, transcript):
 
     embeddings = np.vstack([_embed_text(chunk) for chunk in chunks]).astype("float32")
 
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(embeddings)
-
     qa_state = {
         "chunks": chunks,
-        "index": index,
+        "embeddings": embeddings,
     }
 
 
@@ -119,12 +122,18 @@ def ask_question(question):
         return "Please provide a question."
 
     chunks = qa_state["chunks"]
-    index = qa_state["index"]
+    embeddings = qa_state["embeddings"]
 
     query_embedding = _embed_text(question)
-    _, indices = index.search(np.array([query_embedding], dtype="float32"), min(4, len(chunks)))
 
-    context_chunks = [chunks[int(idx)] for idx in indices[0] if 0 <= int(idx) < len(chunks)]
+    # Cosine similarity search (replaces FAISS for Windows compatibility)
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    query_norm = np.linalg.norm(query_embedding)
+    similarities = (embeddings @ query_embedding) / (norms.flatten() * query_norm + 1e-10)
+    k = min(4, len(chunks))
+    top_indices = np.argsort(similarities)[-k:][::-1]
+
+    context_chunks = [chunks[int(idx)] for idx in top_indices]
     if not context_chunks:
         return "I couldn't find relevant context in the transcript."
 
