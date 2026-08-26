@@ -18,6 +18,19 @@ function App() {
     baseURL: import.meta.env.VITE_API_URL || "http://localhost:5000",
   });
 
+  const friendlyErrors = {
+    no_transcript: "There is no transcript available for this video.",
+    auth_required: "This video requires signing in to YouTube to view its transcript.",
+    ip_blocked: "YouTube is blocking requests from the server. Try again later.",
+    video_unavailable: "This video is unavailable (private, removed, or deleted).",
+  };
+
+  const getProcessError = (err) =>
+    friendlyErrors[err.response?.data?.error_code] ||
+    err.response?.data?.error ||
+    err.message ||
+    "Failed to process video. Please check the URL.";
+
   const processVideo = async () => {
     if (!url) {
       setStatus({ type: "error", message: "Please provide a YouTube URL!" });
@@ -35,7 +48,7 @@ function App() {
       console.error(err);
       setStatus({
         type: "error",
-        message: err.response?.data?.error || err.message || "Failed to process video. Please check the URL.",
+        message: getProcessError(err),
       });
     } finally {
       setIsProcessing(false);

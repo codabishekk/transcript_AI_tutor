@@ -5,7 +5,15 @@ import tempfile
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import yt_dlp
-from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api import (
+    YouTubeTranscriptApi,
+    AgeRestricted,
+    IpBlocked,
+    NoTranscriptFound,
+    RequestBlocked,
+    TranscriptsDisabled,
+    VideoUnavailable,
+)
 
 from rag import process_video, ask_question
 
@@ -85,12 +93,100 @@ def fetch_transcript_ytdlp(video_id, cookiefile=None):
     raise Exception("No English transcript available")
 
 
+AUTH_ERROR_MARKERS = (
+    "sign in",
+    "sign-in",
+    "log in",
+    "login",
+    "logged in",
+    "not a bot",
+    "age-restricted",
+    "age restricted",
+    "members-only",
+    "members only",
+    "membership",
+    "requires authentication",
+    "authentication",
+)
+
+NO_TRANSCRIPT_MARKERS = (
+    "no subtitles",
+    "no video subtitles",
+    "no transcript",
+    "no captions",
+    "subtitles are disabled",
+    "no automatic captions",
+    "no timed captions",
+)
+
+
+def _has_marker(message, markers):
+    lowered = message.lower()
+    return any(marker in lowered for marker in markers)
+
+
+class TranscriptFetchError(Exception):
+    def __init__(self, message, code="unknown"):
+        super().__init__(message)
+        self.code = code
+
+
+def _cookies_configured():
+    if os.getenv("YT_DLP_COOKIES_BASE64") or os.getenv("YT_DLP_COOKIES_TEXT"):
+        return True
+    cookie_path = resolve_cookiefile_path()
+    return bool(cookie_path and os.path.isfile(cookie_path) and os.path.getsize(cookie_path) > 0)
+
+
+def _describe_failure(api_error, yt_error):
+    yt_msg = str(yt_error)
+    api_msg = str(api_error) if api_error else ""
+    combined = f"{api_msg}\n{yt_msg}"
+
+    if isinstance(api_error, AgeRestricted) or _has_marker(combined, AUTH_ERROR_MARKERS):
+        if _cookies_configured():
+            return (
+                "the video requires authentication, but the configured YouTube cookies are "
+                "invalid or expired. Export fresh cookies with backend/export_cookies.py and "
+                "update YT_DLP_COOKIES_BASE64 on the server.",
+                "auth_required",
+            )
+        return (
+            "this video requires you to be signed in to YouTube (or is age-restricted). "
+            "Export your YouTube cookies by running backend/export_cookies.py and set the "
+            "YT_DLP_COOKIES_BASE64 env var on the server (for local development, place the "
+            "generated cookies.txt in backend/), then retry. "
+            "See https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp",
+            "auth_required",
+        )
+
+    if isinstance(api_error, (NoTranscriptFound, TranscriptsDisabled)) or _has_marker(
+        yt_msg, NO_TRANSCRIPT_MARKERS
+    ):
+        return "no English transcript or captions were found for this video.", "no_transcript"
+
+    if isinstance(api_error, (RequestBlocked, IpBlocked)) or "blocked" in yt_msg.lower():
+        return (
+            "YouTube is blocking requests from the server's IP address (common on cloud "
+            "hosts like Render). Configuring YouTube cookies via YT_DLP_COOKIES_BASE64 "
+            "usually fixes this. "
+            "See https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp",
+            "ip_blocked",
+        )
+
+    if isinstance(api_error, VideoUnavailable):
+        return "the video is unavailable (private, removed, or deleted).", "video_unavailable"
+
+    return yt_msg, "unknown"
+
+
 def fetch_transcript(video_id):
     # Try youtube-transcript-api first (no auth needed for public videos)
+    api_error = None
     try:
         return fetch_transcript_api(video_id)
-    except Exception:
-        pass
+    except Exception as e:
+        api_error = e
 
     # Fall back to yt-dlp with cookies for restricted videos
     cookie_b64 = os.getenv("YT_DLP_COOKIES_BASE64")
@@ -105,19 +201,8 @@ def fetch_transcript(video_id):
     try:
         return fetch_transcript_ytdlp(video_id, cookiefile=cookie_file)
     except Exception as yt_error:
-        cookie_path = resolve_cookiefile_path()
-        if cookie_path and os.path.isfile(cookie_path) and os.path.getsize(cookie_path) > 0:
-            raise Exception(
-                f"Failed to fetch transcript using yt-dlp with cookies at {cookie_path}. "
-                "Make sure the file contains valid YouTube session cookies. "
-                "See https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies"
-            ) from yt_error
-        raise Exception(
-            "Failed to fetch transcript. Some YouTube videos require authentication. "
-            "Export YouTube cookies to backend/cookies.txt or set YT_DLP_COOKIES_FILE or YT_DLP_COOKIES_TEXT. "
-            "You can also set YT_DLP_COOKIES_BASE64 with base64-encoded cookies content. "
-            "See https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
-        ) from yt_error
+        message, code = _describe_failure(api_error, yt_error)
+        raise TranscriptFetchError(message, code) from yt_error
     finally:
         if cookie_file and os.path.isfile(cookie_file):
             os.remove(cookie_file)
@@ -134,8 +219,10 @@ def process():
     try:
         video_id = extract_video_id(url)
         transcript = fetch_transcript(video_id)
+    except TranscriptFetchError as e:
+        return jsonify({"error": f"Failed to fetch transcript: {str(e)}", "error_code": e.code}), 500
     except Exception as e:
-        return jsonify({"error": f"Failed to fetch transcript: {str(e)}"}), 500
+        return jsonify({"error": f"Failed to fetch transcript: {str(e)}", "error_code": "unknown"}), 500
 
     try:
         process_video(url, transcript)
