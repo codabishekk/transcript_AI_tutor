@@ -231,8 +231,8 @@ def _describe_failure(api_error, yt_error):
             )
         return (
             "YouTube blocks transcript requests from cloud server IPs. "
-            "Set the TRANSCRIPT_PROXY env var to a residential proxy URL on Render, "
-            "or run the app locally.",
+            "Deploy the Cloudflare Worker in proxy/ (free) and set TRANSCRIPT_PROXY "
+            "to its URL on Render, or run the app locally.",
             "ip_blocked",
         )
 
@@ -240,6 +240,22 @@ def _describe_failure(api_error, yt_error):
         return "the video is unavailable (private, removed, or deleted).", "video_unavailable"
 
     return yt_msg, "unknown"
+
+
+def fetch_transcript_worker(video_id):
+    proxy_url = os.getenv("TRANSCRIPT_PROXY", "").rstrip("/")
+    worker_url = f"{proxy_url}?v={video_id}" if proxy_url else None
+    if not worker_url:
+        raise Exception("No Worker URL configured")
+    resp = _requests.get(worker_url, timeout=30)
+    data = resp.json()
+    if data.get("ok") and data.get("text"):
+        return data["text"]
+    raise Exception(data.get("error") or "Worker returned no transcript")
+
+
+def _is_worker_url(proxy_url):
+    return proxy_url and "workers.dev" in proxy_url
 
 
 def fetch_transcript_invidious(video_id):
@@ -314,6 +330,14 @@ def fetch_transcript(video_id):
         except Exception as e:
             yt_error = e
 
+        # If TRANSCRIPT_PROXY points to a Cloudflare Worker, call its API directly
+        proxy_url = os.getenv("TRANSCRIPT_PROXY", "")
+        if _is_worker_url(proxy_url):
+            try:
+                return fetch_transcript_worker(video_id)
+            except Exception:
+                pass
+
         # Fall back to Invidious API (bypasses IP blocks via third-party proxies)
         try:
             return fetch_transcript_invidious(video_id)
@@ -380,6 +404,8 @@ def debug_cookies():
     info["has_env_text"] = bool(os.getenv("YT_DLP_COOKIES_TEXT"))
     info["has_env_file"] = bool(os.getenv("YT_DLP_COOKIES_FILE"))
     info["has_openrouter_key"] = bool(os.getenv("OPENROUTER_API_KEY"))
+    info["has_transcript_proxy"] = bool(os.getenv("TRANSCRIPT_PROXY"))
+    info["is_worker_proxy"] = _is_worker_url(os.getenv("TRANSCRIPT_PROXY", ""))
     if cookie_path and os.path.isfile(cookie_path):
         try:
             jar = MozillaCookieJar(cookie_path)
