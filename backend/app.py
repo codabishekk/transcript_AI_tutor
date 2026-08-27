@@ -263,7 +263,9 @@ def process():
         process_video(url, transcript)
         return jsonify({"message": "Transcript processed successfully"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Failed to process transcript: {str(e)}", "error_code": "processing_error"}), 500
 
 
 @app.route("/ask", methods=["POST"])
