@@ -73,9 +73,17 @@ def write_temp_cookies_from_text(cookie_text):
     return tmp_file.name
 
 
+def _proxy_url():
+    return os.getenv("TRANSCRIPT_PROXY", "").strip()
+
+
+def _is_worker_url(proxy_url):
+    return proxy_url and "workers.dev" in proxy_url
+
+
 def _build_proxy_config():
-    proxy_url = os.getenv("TRANSCRIPT_PROXY")
-    if not proxy_url:
+    proxy_url = _proxy_url()
+    if not proxy_url or _is_worker_url(proxy_url):
         return None
     from youtube_transcript_api.proxies import GenericProxyConfig
     if proxy_url.startswith("socks"):
@@ -128,6 +136,9 @@ def fetch_transcript_ytdlp(video_id, cookiefile=None):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         },
     }
+    proxy_url = _proxy_url()
+    if proxy_url and not _is_worker_url(proxy_url):
+        ydl_opts["proxy"] = proxy_url
     cookies_path = cookiefile or resolve_cookiefile_path()
     if cookies_path and os.path.isfile(cookies_path) and os.path.getsize(cookies_path) > 0:
         ydl_opts["cookiefile"] = cookies_path
@@ -254,10 +265,6 @@ def fetch_transcript_worker(video_id):
     raise Exception(data.get("error") or "Worker returned no transcript")
 
 
-def _is_worker_url(proxy_url):
-    return proxy_url and "workers.dev" in proxy_url
-
-
 def fetch_transcript_invidious(video_id):
     INVIDIOUS_INSTANCES = [
         "https://inv.nadeko.net",
@@ -267,7 +274,9 @@ def fetch_transcript_invidious(video_id):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     }
-    proxy_url = os.getenv("TRANSCRIPT_PROXY")
+    proxy_url = _proxy_url()
+    if _is_worker_url(proxy_url):
+        proxy_url = None
     proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
 
     for instance in INVIDIOUS_INSTANCES:
@@ -316,6 +325,24 @@ def fetch_transcript(video_id):
         resolved_cookie = None
 
     try:
+        proxy_url = _proxy_url()
+        worker_configured = _is_worker_url(proxy_url)
+
+        # Worker mode: try the Cloudflare Worker API first — it returns the
+        # transcript directly and is the intended path when configured.
+        if worker_configured:
+            try:
+                return fetch_transcript_worker(video_id)
+            except Exception as e:
+                api_error = e
+                yt_error = None
+                try:
+                    return fetch_transcript_invidious(video_id)
+                except Exception:
+                    pass
+                message, code = _describe_failure(api_error, yt_error)
+                raise TranscriptFetchError(message, code) from api_error
+
         # Try youtube-transcript-api first (with cookies when available)
         api_error = None
         try:
@@ -329,14 +356,6 @@ def fetch_transcript(video_id):
             return fetch_transcript_ytdlp(video_id, cookiefile=resolved_cookie)
         except Exception as e:
             yt_error = e
-
-        # If TRANSCRIPT_PROXY points to a Cloudflare Worker, call its API directly
-        proxy_url = os.getenv("TRANSCRIPT_PROXY", "")
-        if _is_worker_url(proxy_url):
-            try:
-                return fetch_transcript_worker(video_id)
-            except Exception:
-                pass
 
         # Fall back to Invidious API (bypasses IP blocks via third-party proxies)
         try:
@@ -405,6 +424,7 @@ def debug_cookies():
     info["has_env_file"] = bool(os.getenv("YT_DLP_COOKIES_FILE"))
     info["has_openrouter_key"] = bool(os.getenv("OPENROUTER_API_KEY"))
     info["has_transcript_proxy"] = bool(os.getenv("TRANSCRIPT_PROXY"))
+    info["transcript_proxy"] = os.getenv("TRANSCRIPT_PROXY", "")
     info["is_worker_proxy"] = _is_worker_url(os.getenv("TRANSCRIPT_PROXY", ""))
     if cookie_path and os.path.isfile(cookie_path):
         try:
