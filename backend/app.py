@@ -94,33 +94,56 @@ def fetch_transcript_api(video_id, cookiefile=None):
 
 
 def fetch_transcript_ytdlp(video_id, cookiefile=None):
-    ydl_opts = {
-        "quiet": True,
-        "skip_download": True,
-        "writesubtitles": True,
-        "writeautomaticsub": True,
-        "subtitleslangs": ["en"],
-    }
-    cookies_path = cookiefile or resolve_cookiefile_path()
-    if cookies_path and os.path.isfile(cookies_path) and os.path.getsize(cookies_path) > 0:
-        ydl_opts["cookiefile"] = cookies_path
+    import tempfile as _tmp
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_id, download=False)
-        subs = info.get("subtitles") or {}
-        auto = info.get("automatic_captions") or {}
+    with _tmp.TemporaryDirectory() as tmpdir:
+        ydl_opts = {
+            "quiet": True,
+            "skip_download": True,
+            "writesubtitles": True,
+            "writeautomaticsub": True,
+            "subtitleslangs": ["en", "en-orig"],
+            "subtitlesformat": "vtt/srt/best",
+            "outtmpl": os.path.join(tmpdir, "%(id)s.%(ext)s"),
+            "geo_bypass": True,
+            "extractor_args": {"youtube": {"player_client": ["web", "mweb"]}},
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        }
+        cookies_path = cookiefile or resolve_cookiefile_path()
+        if cookies_path and os.path.isfile(cookies_path) and os.path.getsize(cookies_path) > 0:
+            ydl_opts["cookiefile"] = cookies_path
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_id, download=False)
+            subs = info.get("subtitles") or {}
+            auto = info.get("automatic_captions") or {}
+            for lang in ["en", "en-orig"]:
+                for source in (subs, auto):
+                    tracks = source.get(lang)
+                    if tracks:
+                        for track in tracks:
+                            sub_url = track.get("url")
+                            if sub_url:
+                                resp = _requests.get(sub_url, headers=ydl_opts["http_headers"], timeout=30)
+                                if resp.ok:
+                                    text = re.sub(r"<[^>]+>", "", resp.text)
+                                    return re.sub(r"\s+", " ", text).strip()
+
         for lang in ["en", "en-orig"]:
-            for source in (subs, auto):
-                tracks = source.get(lang)
-                if tracks:
-                    for track in tracks:
-                        sub_url = track.get("url")
-                        if sub_url:
-                            import requests
-                            resp = requests.get(sub_url)
-                            if resp.ok:
-                                text = re.sub(r"<[^>]+>", "", resp.text)
-                                return re.sub(r"\s+", " ", text).strip()
+            sub_file = os.path.join(tmpdir, f"{video_id}.{lang}.vtt")
+            if os.path.isfile(sub_file):
+                with open(sub_file, "r", encoding="utf-8") as f:
+                    text = re.sub(r"<[^>]+>", "", f.read())
+                    return re.sub(r"\s+", " ", text).strip()
+            sub_file = os.path.join(tmpdir, f"{video_id}.{lang}.srv3")
+            if os.path.isfile(sub_file):
+                with open(sub_file, "r", encoding="utf-8") as f:
+                    text = re.sub(r"<[^>]+>", "", f.read())
+                    return re.sub(r"\s+", " ", text).strip()
+
     raise Exception("No English transcript available")
 
 
