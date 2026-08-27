@@ -37,10 +37,26 @@ def resolve_cookiefile_path():
     return os.path.join(BASE_DIR, "cookies.txt")
 
 
+COOKIE_HEADER = b"# Netscape HTTP Cookie File\n"
+
+
+def _ensure_cookie_header(data):
+    if isinstance(data, str):
+        if not data.startswith("# Netscape"):
+            return COOKIE_HEADER + data.encode("utf-8")
+        return data.encode("utf-8")
+    if isinstance(data, bytes):
+        if not data.startswith(b"# Netscape"):
+            return COOKIE_HEADER + data
+        return data
+    return data
+
+
 def write_temp_cookies_from_base64(cookie_b64):
     if not cookie_b64:
         return None
     decoded = base64.b64decode(cookie_b64)
+    decoded = _ensure_cookie_header(decoded)
     tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
     tmp_file.write(decoded)
     tmp_file.close()
@@ -50,8 +66,9 @@ def write_temp_cookies_from_base64(cookie_b64):
 def write_temp_cookies_from_text(cookie_text):
     if not cookie_text:
         return None
+    data = _ensure_cookie_header(cookie_text)
     tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
-    tmp_file.write(cookie_text.encode("utf-8"))
+    tmp_file.write(data)
     tmp_file.close()
     return tmp_file.name
 
