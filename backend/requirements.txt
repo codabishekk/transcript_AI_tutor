@@ -3,8 +3,9 @@ flask-cors>=6.0.5
 gunicorn
 python-dotenv>=1.2.2
 
-faiss-cpu>=1.14.3
 numpy>=1.26.0
 
 yt-dlp
 requests
+youtube-transcript-api>=0.6.2
+fastembed>=0.4.0

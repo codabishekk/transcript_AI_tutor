@@ -2,8 +2,10 @@ import base64
 import os
 import re
 import tempfile
+from http.cookiejar import MozillaCookieJar
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import requests as _requests
 import yt_dlp
 from youtube_transcript_api import (
     YouTubeTranscriptApi,
@@ -54,9 +56,21 @@ def write_temp_cookies_from_text(cookie_text):
     return tmp_file.name
 
 
-def fetch_transcript_api(video_id):
+def fetch_transcript_api(video_id, cookiefile=None):
+    http_client = None
+    if cookiefile:
+        jar = MozillaCookieJar(cookiefile)
+        try:
+            jar.load(ignore_discard=True, ignore_expires=True)
+        except Exception:
+            pass
+        else:
+            session = _requests.Session()
+            session.cookies = jar
+            http_client = session
     try:
-        transcript = YouTubeTranscriptApi().fetch(video_id, languages=["en", "en-orig"])
+        api = YouTubeTranscriptApi(http_client=http_client) if http_client else YouTubeTranscriptApi()
+        transcript = api.fetch(video_id, languages=["en", "en-orig"])
         return " ".join(snippet.text for snippet in transcript.snippets)
     except Exception:
         raise
@@ -181,14 +195,6 @@ def _describe_failure(api_error, yt_error):
 
 
 def fetch_transcript(video_id):
-    # Try youtube-transcript-api first (no auth needed for public videos)
-    api_error = None
-    try:
-        return fetch_transcript_api(video_id)
-    except Exception as e:
-        api_error = e
-
-    # Fall back to yt-dlp with cookies for restricted videos
     cookie_b64 = os.getenv("YT_DLP_COOKIES_BASE64")
     cookie_text = os.getenv("YT_DLP_COOKIES_TEXT")
     cookie_file = None
@@ -198,8 +204,20 @@ def fetch_transcript(video_id):
     elif cookie_text:
         cookie_file = write_temp_cookies_from_text(cookie_text)
 
+    resolved_cookie = cookie_file or resolve_cookiefile_path()
+    if resolved_cookie and (not os.path.isfile(resolved_cookie) or os.path.getsize(resolved_cookie) == 0):
+        resolved_cookie = None
+
+    # Try youtube-transcript-api first (with cookies when available)
+    api_error = None
     try:
-        return fetch_transcript_ytdlp(video_id, cookiefile=cookie_file)
+        return fetch_transcript_api(video_id, cookiefile=resolved_cookie)
+    except Exception as e:
+        api_error = e
+
+    # Fall back to yt-dlp with cookies for restricted videos
+    try:
+        return fetch_transcript_ytdlp(video_id, cookiefile=resolved_cookie)
     except Exception as yt_error:
         message, code = _describe_failure(api_error, yt_error)
         raise TranscriptFetchError(message, code) from yt_error
