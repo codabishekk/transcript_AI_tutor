@@ -284,5 +284,28 @@ def ask():
         return jsonify({"error": f"Failed to generate answer: {str(e)}"}), 500
 
 
+@app.route("/debug/cookies")
+def debug_cookies():
+    info = {}
+    info["BASE_DIR"] = BASE_DIR
+    info["cookie_file_path"] = resolve_cookiefile_path()
+    cookie_path = resolve_cookiefile_path()
+    info["file_exists"] = os.path.isfile(cookie_path) if cookie_path else False
+    info["file_size"] = os.path.getsize(cookie_path) if cookie_path and os.path.isfile(cookie_path) else 0
+    info["has_env_base64"] = bool(os.getenv("YT_DLP_COOKIES_BASE64"))
+    info["has_env_text"] = bool(os.getenv("YT_DLP_COOKIES_TEXT"))
+    info["has_env_file"] = bool(os.getenv("YT_DLP_COOKIES_FILE"))
+    info["has_openrouter_key"] = bool(os.getenv("OPENROUTER_API_KEY"))
+    if cookie_path and os.path.isfile(cookie_path):
+        try:
+            jar = MozillaCookieJar(cookie_path)
+            jar.load(ignore_discard=True, ignore_expires=True)
+            info["cookies_loaded"] = len(list(jar))
+            info["cookie_names"] = sorted({c.name for c in jar})
+        except Exception as e:
+            info["cookie_load_error"] = str(e)
+    return jsonify(info)
+
+
 if __name__ == "__main__":
     app.run(debug=True)
