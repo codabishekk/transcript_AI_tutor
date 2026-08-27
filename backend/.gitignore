@@ -8,5 +8,5 @@ wheels/
 .env
 # Virtual environments
 .venv
-# YouTube session cookies (sensitive - never commit)
-cookies.txt
+# YouTube session cookies
+# cookies.txt
