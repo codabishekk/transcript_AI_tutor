@@ -117,56 +117,36 @@ def fetch_transcript_api(video_id, cookiefile=None):
 
 
 def fetch_transcript_ytdlp(video_id, cookiefile=None):
-    import tempfile as _tmp
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitleslangs": ["en", "en-orig"],
+        "geo_bypass": True,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        },
+    }
+    cookies_path = cookiefile or resolve_cookiefile_path()
+    if cookies_path and os.path.isfile(cookies_path) and os.path.getsize(cookies_path) > 0:
+        ydl_opts["cookiefile"] = cookies_path
 
-    with _tmp.TemporaryDirectory() as tmpdir:
-        ydl_opts = {
-            "quiet": True,
-            "skip_download": True,
-            "writesubtitles": True,
-            "writeautomaticsub": True,
-            "subtitleslangs": ["en", "en-orig"],
-            "subtitlesformat": "vtt/srt/best",
-            "outtmpl": os.path.join(tmpdir, "%(id)s.%(ext)s"),
-            "geo_bypass": True,
-            "extractor_args": {"youtube": {"player_client": ["web", "mweb"]}},
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-        }
-        cookies_path = cookiefile or resolve_cookiefile_path()
-        if cookies_path and os.path.isfile(cookies_path) and os.path.getsize(cookies_path) > 0:
-            ydl_opts["cookiefile"] = cookies_path
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_id, download=False)
-            subs = info.get("subtitles") or {}
-            auto = info.get("automatic_captions") or {}
-            for lang in ["en", "en-orig"]:
-                for source in (subs, auto):
-                    tracks = source.get(lang)
-                    if tracks:
-                        for track in tracks:
-                            sub_url = track.get("url")
-                            if sub_url:
-                                resp = _requests.get(sub_url, headers=ydl_opts["http_headers"], timeout=30)
-                                if resp.ok:
-                                    text = re.sub(r"<[^>]+>", "", resp.text)
-                                    return re.sub(r"\s+", " ", text).strip()
-
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(video_id, download=False)
+        subs = info.get("subtitles") or {}
+        auto = info.get("automatic_captions") or {}
         for lang in ["en", "en-orig"]:
-            sub_file = os.path.join(tmpdir, f"{video_id}.{lang}.vtt")
-            if os.path.isfile(sub_file):
-                with open(sub_file, "r", encoding="utf-8") as f:
-                    text = re.sub(r"<[^>]+>", "", f.read())
-                    return re.sub(r"\s+", " ", text).strip()
-            sub_file = os.path.join(tmpdir, f"{video_id}.{lang}.srv3")
-            if os.path.isfile(sub_file):
-                with open(sub_file, "r", encoding="utf-8") as f:
-                    text = re.sub(r"<[^>]+>", "", f.read())
-                    return re.sub(r"\s+", " ", text).strip()
-
+            for source in (subs, auto):
+                tracks = source.get(lang)
+                if tracks:
+                    for track in tracks:
+                        sub_url = track.get("url")
+                        if sub_url:
+                            resp = _requests.get(sub_url, headers=ydl_opts["http_headers"], timeout=30)
+                            if resp.ok:
+                                text = re.sub(r"<[^>]+>", "", resp.text)
+                                return re.sub(r"\s+", " ", text).strip()
     raise Exception("No English transcript available")
 
 
@@ -266,13 +246,7 @@ def fetch_transcript_invidious(video_id):
     INVIDIOUS_INSTANCES = [
         "https://inv.nadeko.net",
         "https://iv.datura.network",
-        "https://invidious.nerdvpn.de",
-        "https://iv.ggtyler.dev",
         "https://invidious.lunar.icu",
-        "https://yt.artemislena.eu",
-        "https://vid.puffyan.us",
-        "https://inv.tux.pizza",
-        "https://invidious.privacyredirect.com",
     ]
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -283,7 +257,7 @@ def fetch_transcript_invidious(video_id):
     for instance in INVIDIOUS_INSTANCES:
         try:
             captions_url = f"{instance}/api/v1/captions/{video_id}"
-            resp = _requests.get(captions_url, headers=headers, timeout=10, proxies=proxies)
+            resp = _requests.get(captions_url, headers=headers, timeout=5, proxies=proxies)
             if not resp.ok:
                 continue
             captions = resp.json().get("captions", [])
@@ -301,7 +275,7 @@ def fetch_transcript_invidious(video_id):
                 continue
 
             sub_url = f"{instance}/api/v1/captions/{video_id}?label={label}"
-            sub_resp = _requests.get(sub_url, headers=headers, timeout=10, proxies=proxies)
+            sub_resp = _requests.get(sub_url, headers=headers, timeout=5, proxies=proxies)
             if sub_resp.ok and sub_resp.text.strip():
                 text = re.sub(r"<[^>]+>", "", sub_resp.text)
                 return re.sub(r"\s+", " ", text).strip()
