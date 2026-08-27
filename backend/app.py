@@ -73,6 +73,22 @@ def write_temp_cookies_from_text(cookie_text):
     return tmp_file.name
 
 
+def _build_proxy_config():
+    proxy_url = os.getenv("TRANSCRIPT_PROXY")
+    if not proxy_url:
+        return None
+    from youtube_transcript_api.proxies import GenericProxyConfig
+    if proxy_url.startswith("socks"):
+        return GenericProxyConfig(
+            http_url=proxy_url,
+            https_url=proxy_url,
+        )
+    return GenericProxyConfig(
+        http_url=proxy_url,
+        https_url=proxy_url,
+    )
+
+
 def fetch_transcript_api(video_id, cookiefile=None):
     http_client = None
     if cookiefile:
@@ -85,8 +101,15 @@ def fetch_transcript_api(video_id, cookiefile=None):
             session = _requests.Session()
             session.cookies = jar
             http_client = session
+
+    proxy_config = _build_proxy_config()
     try:
-        api = YouTubeTranscriptApi(http_client=http_client) if http_client else YouTubeTranscriptApi()
+        if proxy_config:
+            api = YouTubeTranscriptApi(proxy_config=proxy_config, http_client=http_client)
+        elif http_client:
+            api = YouTubeTranscriptApi(http_client=http_client)
+        else:
+            api = YouTubeTranscriptApi()
         transcript = api.fetch(video_id, languages=["en", "en-orig"])
         return " ".join(snippet.text for snippet in transcript.snippets)
     except Exception:
@@ -220,11 +243,16 @@ def _describe_failure(api_error, yt_error):
         return "no English transcript or captions were found for this video.", "no_transcript"
 
     if isinstance(api_error, (RequestBlocked, IpBlocked)) or "blocked" in yt_msg.lower():
+        if os.getenv("TRANSCRIPT_PROXY"):
+            return (
+                "YouTube is blocking requests even through the configured proxy. "
+                "Try a different proxy or update your cookies.",
+                "ip_blocked",
+            )
         return (
-            "YouTube is blocking requests from the server's IP address (common on cloud "
-            "hosts like Render). Configuring YouTube cookies via YT_DLP_COOKIES_BASE64 "
-            "usually fixes this. "
-            "See https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp",
+            "YouTube blocks transcript requests from cloud server IPs. "
+            "Set the TRANSCRIPT_PROXY env var to a residential proxy URL on Render, "
+            "or run the app locally.",
             "ip_blocked",
         )
 
@@ -232,6 +260,55 @@ def _describe_failure(api_error, yt_error):
         return "the video is unavailable (private, removed, or deleted).", "video_unavailable"
 
     return yt_msg, "unknown"
+
+
+def fetch_transcript_invidious(video_id):
+    INVIDIOUS_INSTANCES = [
+        "https://inv.nadeko.net",
+        "https://iv.datura.network",
+        "https://invidious.nerdvpn.de",
+        "https://iv.ggtyler.dev",
+        "https://invidious.lunar.icu",
+        "https://yt.artemislena.eu",
+        "https://vid.puffyan.us",
+        "https://inv.tux.pizza",
+        "https://invidious.privacyredirect.com",
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+    proxy_url = os.getenv("TRANSCRIPT_PROXY")
+    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+
+    for instance in INVIDIOUS_INSTANCES:
+        try:
+            captions_url = f"{instance}/api/v1/captions/{video_id}"
+            resp = _requests.get(captions_url, headers=headers, timeout=10, proxies=proxies)
+            if not resp.ok:
+                continue
+            captions = resp.json().get("captions", [])
+
+            label = None
+            for cap in captions:
+                lang = cap.get("languageCode") or cap.get("language_code", "")
+                if lang in ("en", "en-US", "en-orig"):
+                    label = cap.get("label")
+                    break
+            if not label and captions:
+                label = captions[0].get("label")
+
+            if not label:
+                continue
+
+            sub_url = f"{instance}/api/v1/captions/{video_id}?label={label}"
+            sub_resp = _requests.get(sub_url, headers=headers, timeout=10, proxies=proxies)
+            if sub_resp.ok and sub_resp.text.strip():
+                text = re.sub(r"<[^>]+>", "", sub_resp.text)
+                return re.sub(r"\s+", " ", text).strip()
+        except Exception:
+            continue
+
+    raise Exception("No English transcript available via Invidious")
 
 
 def fetch_transcript(video_id):
@@ -248,17 +325,27 @@ def fetch_transcript(video_id):
     if resolved_cookie and (not os.path.isfile(resolved_cookie) or os.path.getsize(resolved_cookie) == 0):
         resolved_cookie = None
 
-    # Try youtube-transcript-api first (with cookies when available)
-    api_error = None
     try:
-        return fetch_transcript_api(video_id, cookiefile=resolved_cookie)
-    except Exception as e:
-        api_error = e
+        # Try youtube-transcript-api first (with cookies when available)
+        api_error = None
+        try:
+            return fetch_transcript_api(video_id, cookiefile=resolved_cookie)
+        except Exception as e:
+            api_error = e
 
-    # Fall back to yt-dlp with cookies for restricted videos
-    try:
-        return fetch_transcript_ytdlp(video_id, cookiefile=resolved_cookie)
-    except Exception as yt_error:
+        # Fall back to yt-dlp with cookies for restricted videos
+        yt_error = None
+        try:
+            return fetch_transcript_ytdlp(video_id, cookiefile=resolved_cookie)
+        except Exception as e:
+            yt_error = e
+
+        # Fall back to Invidious API (bypasses IP blocks via third-party proxies)
+        try:
+            return fetch_transcript_invidious(video_id)
+        except Exception:
+            pass
+
         message, code = _describe_failure(api_error, yt_error)
         raise TranscriptFetchError(message, code) from yt_error
     finally:
