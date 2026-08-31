@@ -81,6 +81,13 @@ def _is_worker_url(proxy_url):
     return proxy_url and "workers.dev" in proxy_url
 
 
+def _describe_raw_error(err):
+    if err is None:
+        return "unknown"
+    text = str(err).strip()
+    return text or "unknown"
+
+
 def _build_proxy_config():
     proxy_url = _proxy_url()
     if not proxy_url or _is_worker_url(proxy_url):
@@ -207,7 +214,7 @@ def _cookies_configured():
 
 
 def _describe_failure(api_error, yt_error):
-    yt_msg = str(yt_error)
+    yt_msg = _describe_raw_error(yt_error)
     api_msg = str(api_error) if api_error else ""
     combined = f"{api_msg}\n{yt_msg}"
 
@@ -335,13 +342,10 @@ def fetch_transcript(video_id):
                 return fetch_transcript_worker(video_id)
             except Exception as e:
                 api_error = e
-                yt_error = None
-                try:
-                    return fetch_transcript_invidious(video_id)
-                except Exception:
-                    pass
-                message, code = _describe_failure(api_error, yt_error)
-                raise TranscriptFetchError(message, code) from api_error
+                # Fall through to the standard stack (cookies -> yt-dlp ->
+                # Invidious) if the Worker fails, so a broken/unreachable
+                # Worker doesn't hard-block processing.
+                return _fetch_via_stack(video_id, resolved_cookie, api_error)
 
         # Try youtube-transcript-api first (with cookies when available)
         api_error = None
@@ -368,6 +372,32 @@ def fetch_transcript(video_id):
     finally:
         if cookie_file and os.path.isfile(cookie_file):
             os.remove(cookie_file)
+
+
+def _fetch_via_stack(video_id, resolved_cookie, worker_error=None):
+    """Try the full fallback stack, reporting the most useful error."""
+    api_error = None
+    try:
+        return fetch_transcript_api(video_id, cookiefile=resolved_cookie)
+    except Exception as e:
+        api_error = e
+
+    yt_error = None
+    try:
+        return fetch_transcript_ytdlp(video_id, cookiefile=resolved_cookie)
+    except Exception as e:
+        yt_error = e
+
+    try:
+        return fetch_transcript_invidious(video_id)
+    except Exception:
+        pass
+
+    if api_error is None and yt_error is None:
+        api_error = worker_error
+    message, code = _describe_failure(api_error, yt_error)
+    raise TranscriptFetchError(message, code) from (yt_error or api_error)
+
 
 @app.route("/process", methods=["POST"])
 def process():
