@@ -54,14 +54,15 @@ function stripTags(s) {
 }
 
 async function getCaptionTracks(videoId) {
-  // Try the innertube player API first (robust, no HTML parsing)
+  // Try the innertube Android client first. The WEB client is heavily gated by
+  // YouTube bot detection (returns LOGIN_REQUIRED for many videos from cloud
+  // IPs), whereas the ANDROID client returns an open player for those same
+  // videos (same approach used by youtube-transcript-api).
   const body = JSON.stringify({
     context: {
       client: {
-        clientName: "WEB",
-        clientVersion: "2.20240827.00.00",
-        hl: "en",
-        visitorData: "CgtIRFlsdHVXd2lBSSjTscuSBzIKCwIJHJCv6euGBQ%3D%3D",
+        clientName: "ANDROID",
+        clientVersion: "20.10.38",
       },
     },
     videoId,
@@ -73,20 +74,58 @@ async function getCaptionTracks(videoId) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "User-Agent": UA,
+      "User-Agent":
+        "com.google.android.youtube/20.10.38 (Linux; U; Android 13) gzip",
       "Accept-Language": "en-US,en;q=0.9",
     },
     body,
   });
 
   if (apiResp.ok) {
-    const data = await apiResp.json();
-    const tracks =
-      data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-    if (tracks && tracks.length) return tracks;
+    try {
+      const data = await apiResp.json();
+      const tracks =
+        data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (tracks && tracks.length) return tracks;
+    } catch {
+      // ignore parse errors and fall through
+    }
   }
 
-  // Fallback: parse the watch page HTML
+  // Fallback 1: try the WEB client innertube player
+  try {
+    const webBody = JSON.stringify({
+      context: {
+        client: {
+          clientName: "WEB",
+          clientVersion: "2.20240827.00.00",
+          hl: "en",
+        },
+      },
+      videoId,
+      contentCheckOk: true,
+      racyCheckOk: true,
+    });
+    const webResp = await fetch(`${INNERTUBE_API}?key=${INNERTUBE_KEY}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": UA,
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      body: webBody,
+    });
+    if (webResp.ok) {
+      const data = await webResp.json();
+      const tracks =
+        data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (tracks && tracks.length) return tracks;
+    }
+  } catch {
+    // ignore and fall through to HTML
+  }
+
+  // Fallback 2: parse the watch page HTML
   const pageResp = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
     headers: HEADERS,
     redirect: "follow",
