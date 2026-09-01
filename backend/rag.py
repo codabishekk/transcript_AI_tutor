@@ -39,18 +39,21 @@ def _get_api_key():
     return api_key
 
 
-def _request_with_retry(method, url, max_retries=3, **kwargs):
+def _request_with_retry(method, url, max_retries=3, retry_statuses=(429,), **kwargs):
+    last_response = None
     for attempt in range(max_retries):
         response = method(url, **kwargs)
-        if response.status_code == 429 and attempt < max_retries - 1:
+        last_response = response
+        if response.status_code in retry_statuses and attempt < max_retries - 1:
             wait_time = 2 ** attempt * 5
-            print(f"Rate limited (429). Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})...")
+            print(f"Model unavailable ({response.status_code}). Retrying in {wait_time}s "
+                  f"(attempt {attempt + 1}/{max_retries})...")
             time.sleep(wait_time)
             continue
         response.raise_for_status()
         return response
-    response.raise_for_status()
-    return response
+    last_response.raise_for_status()
+    return last_response
 
 
 _model = None
@@ -69,26 +72,39 @@ def _embed_text(text):
     return np.array(embedding, dtype="float32")
 
 
+_MODELS = (
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "z-ai/glm-5.2:free",
+    "minimax/minimax-m3:free",
+)
+
+
 def _generate_answer(prompt):
     api_key = _get_api_key()
-    payload = {
-        "model": "nvidia/nemotron-3-super-120b-a12b:free",
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    response = _request_with_retry(
-        requests.post,
-        "https://openrouter.ai/api/v1/chat/completions",
-        json=payload,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-        },
-        timeout=60,
-    )
-    data = response.json()
-    choices = data.get("choices", [])
-    if not choices:
-        return "No answer generated."
-    return choices[0].get("message", {}).get("content", "").strip() or "No answer generated."
+    headers = {"Authorization": f"Bearer {api_key}"}
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    last_err = None
+    for model in _MODELS:
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        try:
+            response = _request_with_retry(
+                requests.post, url, json=payload, headers=headers, timeout=60
+            )
+            data = response.json()
+            choices = data.get("choices", [])
+            if not choices:
+                return "No answer generated."
+            content = choices[0].get("message", {}).get("content", "").strip()
+            if content:
+                return content
+            return "No answer generated."
+        except Exception as e:
+            last_err = e
+            print(f"Model {model} failed ({e}); trying fallback.")
+    raise last_err
 
 
 def process_video(url, transcript):
