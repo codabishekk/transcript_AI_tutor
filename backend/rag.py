@@ -94,13 +94,17 @@ def _generate_answer(prompt):
                 requests.post, url, json=payload, headers=headers, timeout=60
             )
             data = response.json()
-            choices = data.get("choices", [])
-            if not choices:
-                return "No answer generated."
-            content = choices[0].get("message", {}).get("content", "").strip()
+            choices = data.get("choices") or []
+            content = ""
+            if choices:
+                content = choices[0].get("message", {}).get("content", "").strip()
             if content:
                 return content
-            return "No answer generated."
+            last_contentless_error = Exception(
+                f"Model {model} returned an empty response"
+            )
+            print(f"Model {model} returned no content; trying fallback.")
+            last_err = last_contentless_error
         except Exception as e:
             last_err = e
             print(f"Model {model} failed ({e}); trying fallback.")
