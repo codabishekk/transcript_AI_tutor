@@ -168,13 +168,20 @@ def fetch_transcript_ytdlp(video_id, cookiefile=None):
     raise Exception("No English transcript available")
 
 
+BOT_CHECK_MARKERS = (
+    "not a bot",
+    "unusual traffic",
+    "too many requests",
+    "sign in to confirm",
+    "sign-in to confirm",
+)
+
 AUTH_ERROR_MARKERS = (
     "sign in",
     "sign-in",
     "log in",
     "login",
     "logged in",
-    "not a bot",
     "age-restricted",
     "age restricted",
     "members-only",
@@ -218,6 +225,22 @@ def _describe_failure(api_error, yt_error):
     api_msg = str(api_error) if api_error else ""
     combined = f"{api_msg}\n{yt_msg}"
 
+    if isinstance(api_error, (RequestBlocked, IpBlocked)) or _has_marker(
+        combined, BOT_CHECK_MARKERS + ("blocked",)
+    ):
+        if os.getenv("TRANSCRIPT_PROXY"):
+            return (
+                "YouTube is blocking requests even through the configured proxy. "
+                "Try a different proxy or update your cookies.",
+                "ip_blocked",
+            )
+        return (
+            "YouTube blocks transcript requests from cloud server IPs. "
+            "Deploy the Cloudflare Worker in proxy/ (free) and set TRANSCRIPT_PROXY "
+            "to its URL on Render, or run the app locally.",
+            "ip_blocked",
+        )
+
     if isinstance(api_error, AgeRestricted) or _has_marker(combined, AUTH_ERROR_MARKERS):
         if _cookies_configured():
             return (
@@ -239,20 +262,6 @@ def _describe_failure(api_error, yt_error):
         yt_msg, NO_TRANSCRIPT_MARKERS
     ):
         return "no English transcript or captions were found for this video.", "no_transcript"
-
-    if isinstance(api_error, (RequestBlocked, IpBlocked)) or "blocked" in yt_msg.lower():
-        if os.getenv("TRANSCRIPT_PROXY"):
-            return (
-                "YouTube is blocking requests even through the configured proxy. "
-                "Try a different proxy or update your cookies.",
-                "ip_blocked",
-            )
-        return (
-            "YouTube blocks transcript requests from cloud server IPs. "
-            "Deploy the Cloudflare Worker in proxy/ (free) and set TRANSCRIPT_PROXY "
-            "to its URL on Render, or run the app locally.",
-            "ip_blocked",
-        )
 
     if isinstance(api_error, VideoUnavailable):
         return "the video is unavailable (private, removed, or deleted).", "video_unavailable"
@@ -347,12 +356,20 @@ def fetch_transcript(video_id):
                 # Worker doesn't hard-block processing.
                 return _fetch_via_stack(video_id, resolved_cookie, api_error)
 
-        # Try youtube-transcript-api first (with cookies when available)
+        # Try youtube-transcript-api with the plain ANDROID client (no
+        # cookies) first — stale cookies from cloud IPs can trigger a
+        # bot-check, while the anonymous client often succeeds.
         api_error = None
         try:
-            return fetch_transcript_api(video_id, cookiefile=resolved_cookie)
+            return fetch_transcript_api(video_id, cookiefile=None)
         except Exception as e:
             api_error = e
+
+        if resolved_cookie:
+            try:
+                return fetch_transcript_api(video_id, cookiefile=resolved_cookie)
+            except Exception as e:
+                api_error = e
 
         # Fall back to yt-dlp with cookies for restricted videos
         yt_error = None
@@ -377,10 +394,19 @@ def fetch_transcript(video_id):
 def _fetch_via_stack(video_id, resolved_cookie, worker_error=None):
     """Try the full fallback stack, reporting the most useful error."""
     api_error = None
+    # First try the plain ANDROID client with no cookies — YouTube can
+    # bot-check cookied sessions from cloud IPs, while an anonymous
+    # ANDROID client request often still succeeds.
     try:
-        return fetch_transcript_api(video_id, cookiefile=resolved_cookie)
+        return fetch_transcript_api(video_id, cookiefile=None)
     except Exception as e:
         api_error = e
+
+    if resolved_cookie:
+        try:
+            return fetch_transcript_api(video_id, cookiefile=resolved_cookie)
+        except Exception as e:
+            api_error = e
 
     yt_error = None
     try:

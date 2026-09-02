@@ -152,6 +152,50 @@ async function getCaptionTracks(videoId) {
   return tracks;
 }
 
+async function fetchCaption(captionUrl, videoId) {
+  const MAX_ATTEMPTS = 3;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const capResp = await fetch(captionUrl, {
+        headers: { ...HEADERS, Referer: `https://www.youtube.com/watch?v=${videoId}` },
+      });
+      if (capResp.status === 429) {
+        throw new Error("Caption fetch returned 429");
+      }
+      if (!capResp.ok)
+        throw new Error(`Caption fetch returned ${capResp.status}`);
+
+      const body = await capResp.text();
+
+      if (body.trim().startsWith("{")) {
+        try {
+          const data = JSON.parse(body);
+          const parts = [];
+          for (const ev of data.events || []) {
+            for (const seg of ev.segs || []) {
+              if (seg.utf8 && seg.utf8 !== "\n") parts.push(seg.utf8);
+            }
+          }
+          if (parts.length) return parts.join(" ").replace(/\s+/g, " ").trim();
+        } catch {
+          // fall through to XML parsing
+        }
+      }
+
+      const text = stripTags(body);
+      if (text) return text;
+      throw new Error("Caption body was empty");
+    } catch (e) {
+      lastErr = e;
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, 800 * attempt));
+      }
+    }
+  }
+  throw lastErr || new Error("Caption fetch failed");
+}
+
 async function fetchTranscript(videoId) {
   const tracks = await getCaptionTracks(videoId);
 
@@ -165,30 +209,7 @@ async function fetchTranscript(videoId) {
   if (!captionUrl) throw new Error("Caption track has no URL");
   if (!captionUrl.includes("fmt=")) captionUrl += "&fmt=json3";
 
-  const capResp = await fetch(captionUrl, {
-    headers: { ...HEADERS, Referer: `https://www.youtube.com/watch?v=${videoId}` },
-  });
-  if (!capResp.ok)
-    throw new Error(`Caption fetch returned ${capResp.status}`);
-
-  const body = await capResp.text();
-
-  if (body.trim().startsWith("{")) {
-    try {
-      const data = JSON.parse(body);
-      const parts = [];
-      for (const ev of data.events || []) {
-        for (const seg of ev.segs || []) {
-          if (seg.utf8 && seg.utf8 !== "\n") parts.push(seg.utf8);
-        }
-      }
-      if (parts.length) return parts.join(" ").replace(/\s+/g, " ").trim();
-    } catch {
-      // fall through to XML parsing
-    }
-  }
-
-  return stripTags(body);
+  return fetchCaption(captionUrl, videoId);
 }
 
 export default {
