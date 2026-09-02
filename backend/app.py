@@ -23,7 +23,7 @@ from rag import process_video, ask_question
 app = Flask(__name__)
 CORS(app)
 
-DEPLOY_MARKER = "multi-worker-rotate-v5"
+DEPLOY_MARKER = "worker-rotate-v5-debug"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
