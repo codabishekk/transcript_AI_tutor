@@ -496,9 +496,32 @@ def process():
         return jsonify({"error": f"Failed to process transcript: {str(e)}", "error_code": "processing_error"}), 500
 
 
+@app.route("/debug/process_test")
+def debug_process_test():
+    import io
+    import traceback
+
+    video_id = request.args.get("video_id", "jNQXAC9IVRw")
+    buf = io.StringIO()
+    t = None
+    try:
+        t = fetch_transcript(video_id)
+        buf.write(f"fetch_transcript OK ({len(t)} chars)\n")
+    except Exception as e:
+        buf.write(f"fetch_transcript FAILED: {e!r}\n")
+        traceback.print_exc(file=buf)
+    if t:
+        try:
+            process_video("https://www.youtube.com/watch?v=" + video_id, t)
+            buf.write("process_video OK\n")
+        except Exception as e:
+            buf.write(f"process_video FAILED: {e!r}\n")
+            traceback.print_exc(file=buf)
+    return buf.getvalue().replace("\n", "<br>"), 200
+
+
 @app.route("/ask", methods=["POST"])
 def ask():
-
     data = request.json
     question = data.get("question")
 
