@@ -23,7 +23,7 @@ from rag import process_video, ask_question
 app = Flask(__name__)
 CORS(app)
 
-DEPLOY_MARKER = "worker-retry-v2"
+DEPLOY_MARKER = "worker-retry-v3"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -272,7 +272,7 @@ def _describe_failure(api_error, yt_error):
     return yt_msg, "unknown"
 
 
-def fetch_transcript_worker(video_id, attempts=3, backoff=1.0):
+def fetch_transcript_worker(video_id, attempts=3, backoff=2.0):
     proxy_url = os.getenv("TRANSCRIPT_PROXY", "").rstrip("/")
     worker_url = f"{proxy_url}?v={video_id}" if proxy_url else None
     if not worker_url:
@@ -280,7 +280,7 @@ def fetch_transcript_worker(video_id, attempts=3, backoff=1.0):
     last_error = None
     for attempt in range(1, attempts + 1):
         try:
-            resp = _requests.get(worker_url, timeout=30)
+            resp = _requests.get(worker_url, timeout=90)
             data = resp.json()
             if data.get("ok") and data.get("text"):
                 return data["text"]
