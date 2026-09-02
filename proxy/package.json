@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy && wrangler deploy --name transcript-proxy-2 --compatibility-date 2024-11-01 && wrangler deploy --name transcript-proxy-3 --compatibility-date 2024-11-01"
   },
   "devDependencies": {
     "wrangler": "^4.127.1"

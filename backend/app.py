@@ -23,7 +23,7 @@ from rag import process_video, ask_question
 app = Flask(__name__)
 CORS(app)
 
-DEPLOY_MARKER = "multi-worker-rotate-v4"
+DEPLOY_MARKER = "multi-worker-rotate-v5"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -76,8 +76,33 @@ def write_temp_cookies_from_text(cookie_text):
     return tmp_file.name
 
 
+DEFAULT_WORKER_URLS = [
+    "https://transcript-proxy.abishekkc923.workers.dev",
+    "https://transcript-proxy-2.abishekkc923.workers.dev",
+    "https://transcript-proxy-3.abishekkc923.workers.dev",
+]
+
+
+def _clean_proxy_entry(entry):
+    """Trim an env entry and strip a stray 'TRANSCRIPT_PROXY=...' prefix so a
+    misconfigured dashboard value (name pasted into the value) still parses."""
+    entry = entry.strip().strip("'\"").rstrip("/")
+    entry = re.sub(r"^[A-Za-z0-9_]+=", "", entry)
+    return entry
+
+
 def _proxy_url():
-    return [u.strip().rstrip("/") for u in os.getenv("TRANSCRIPT_PROXY", "").split(",") if u.strip()]
+    raw = os.getenv("TRANSCRIPT_PROXY", "")
+    urls = [_clean_proxy_entry(u) for u in raw.split(",")]
+    urls = [u for u in urls if u]
+    # If no plain (non-Worker) proxy is configured, fall back to the default
+    # redundancy set so rotation across the extra Workers engages even when the
+    # dashboard env var holds a single/misconfigured URL.
+    if not any(not _is_worker_url(u) for u in urls):
+        for d in DEFAULT_WORKER_URLS:
+            if d not in urls:
+                urls.append(d)
+    return urls
 
 
 def _is_worker_url(proxy_url):
