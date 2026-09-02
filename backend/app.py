@@ -23,7 +23,7 @@ from rag import process_video, ask_question
 app = Flask(__name__)
 CORS(app)
 
-DEPLOY_MARKER = "worker-rotate-v5-debug"
+DEPLOY_MARKER = "worker-rotate-v6"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -303,26 +303,40 @@ def _describe_failure(api_error, yt_error):
     return yt_msg, "unknown"
 
 
-def fetch_transcript_worker(video_id, attempts=3, backoff=2.0):
+def fetch_transcript_worker(video_id, timeout=45, retries=1, backoff=2.0):
     worker_urls = _worker_urls()
     if not worker_urls:
         raise Exception("No Worker URL configured")
     last_error = None
-    # Rotate across every configured Worker (each has its own egress) before
-    # retrying the same one, so a throttled IP doesn't hard-block /process.
-    order = list(worker_urls)
-    for worker_url in order:
-        for attempt in range(1, attempts + 1):
-            try:
-                resp = _requests.get(f"{worker_url}?v={video_id}", timeout=90)
-                data = resp.json()
-                if data.get("ok") and data.get("text"):
-                    return data["text"]
-                last_error = Exception(data.get("error") or "Worker returned no transcript")
-            except Exception as e:
-                last_error = e
-            if attempt < attempts:
-                time.sleep(backoff * attempt)
+
+    # Pass 1: try every Worker once. Each has its own YouTube-facing egress,
+    # so an un-throttled IP can return immediately before any backoff.
+    def _try(worker_url):
+        try:
+            resp = _requests.get(f"{worker_url}?v={video_id}", timeout=timeout)
+            data = resp.json()
+            if data.get("ok") and data.get("text"):
+                return data["text"], None
+            return None, Exception(data.get("error") or "Worker returned no transcript")
+        except Exception as e:
+            return None, e
+
+    for worker_url in worker_urls:
+        text, err = _try(worker_url)
+        if text is not None:
+            return text
+        last_error = err
+
+    # Pass 2: a single retry round across all Workers after a short sleep, so
+    # a temporarily throttled egress that recovers meanwhile is still used.
+    for attempt in range(1, retries + 1):
+        time.sleep(backoff * attempt)
+        for worker_url in worker_urls:
+            text, err = _try(worker_url)
+            if text is not None:
+                return text
+            last_error = err
+
     raise last_error or Exception("Worker returned no transcript")
 
 
