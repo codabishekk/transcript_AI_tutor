@@ -535,6 +535,19 @@ def debug_trace():
     return "no trace file", 200
 
 
+@app.errorhandler(Exception)
+def _debug_capture_unhandled(err):
+    import traceback
+
+    tb = traceback.format_exc()
+    try:
+        with open(os.path.join(BASE_DIR, "debug_trace.txt"), "w", encoding="utf-8") as f:
+            f.write(tb)
+    except Exception:
+        pass
+    return tb.replace("\n", "<br>"), 500
+
+
 @app.route("/ask", methods=["POST"])
 def ask():
     data = request.json
