@@ -517,7 +517,22 @@ def debug_process_test():
         except Exception as e:
             buf.write(f"process_video FAILED: {e!r}\n")
             traceback.print_exc(file=buf)
-    return buf.getvalue().replace("\n", "<br>"), 200
+    text = buf.getvalue()
+    try:
+        with open(os.path.join(BASE_DIR, "debug_trace.txt"), "w", encoding="utf-8") as f:
+            f.write(text)
+    except Exception:
+        pass
+    return text.replace("\n", "<br>"), 200
+
+
+@app.route("/debug/trace")
+def debug_trace():
+    path = os.path.join(BASE_DIR, "debug_trace.txt")
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            return f.read().replace("\n", "<br>"), 200
+    return "no trace file", 200
 
 
 @app.route("/ask", methods=["POST"])
