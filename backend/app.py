@@ -2,6 +2,7 @@ import base64
 import os
 import re
 import tempfile
+import time
 from http.cookiejar import MozillaCookieJar
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -269,16 +270,24 @@ def _describe_failure(api_error, yt_error):
     return yt_msg, "unknown"
 
 
-def fetch_transcript_worker(video_id):
+def fetch_transcript_worker(video_id, attempts=3, backoff=1.0):
     proxy_url = os.getenv("TRANSCRIPT_PROXY", "").rstrip("/")
     worker_url = f"{proxy_url}?v={video_id}" if proxy_url else None
     if not worker_url:
         raise Exception("No Worker URL configured")
-    resp = _requests.get(worker_url, timeout=30)
-    data = resp.json()
-    if data.get("ok") and data.get("text"):
-        return data["text"]
-    raise Exception(data.get("error") or "Worker returned no transcript")
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = _requests.get(worker_url, timeout=30)
+            data = resp.json()
+            if data.get("ok") and data.get("text"):
+                return data["text"]
+            last_error = Exception(data.get("error") or "Worker returned no transcript")
+        except Exception as e:
+            last_error = e
+        if attempt < attempts:
+            time.sleep(backoff * attempt)
+    raise last_error or Exception("Worker returned no transcript")
 
 
 def fetch_transcript_invidious(video_id):
