@@ -23,6 +23,8 @@ from rag import process_video, ask_question
 app = Flask(__name__)
 CORS(app)
 
+DEPLOY_MARKER = "worker-retry-v2"
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -491,6 +493,7 @@ def debug_cookies():
     info["has_transcript_proxy"] = bool(os.getenv("TRANSCRIPT_PROXY"))
     info["transcript_proxy"] = os.getenv("TRANSCRIPT_PROXY", "")
     info["is_worker_proxy"] = _is_worker_url(os.getenv("TRANSCRIPT_PROXY", ""))
+    info["deploy_marker"] = DEPLOY_MARKER
     if cookie_path and os.path.isfile(cookie_path):
         try:
             jar = MozillaCookieJar(cookie_path)
