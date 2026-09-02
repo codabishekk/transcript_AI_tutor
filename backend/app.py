@@ -23,7 +23,7 @@ from rag import process_video, ask_question
 app = Flask(__name__)
 CORS(app)
 
-DEPLOY_MARKER = "worker-retry-v3"
+DEPLOY_MARKER = "multi-worker-rotate-v4"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -77,11 +77,15 @@ def write_temp_cookies_from_text(cookie_text):
 
 
 def _proxy_url():
-    return os.getenv("TRANSCRIPT_PROXY", "").strip()
+    return [u.strip().rstrip("/") for u in os.getenv("TRANSCRIPT_PROXY", "").split(",") if u.strip()]
 
 
 def _is_worker_url(proxy_url):
-    return proxy_url and "workers.dev" in proxy_url
+    return bool(proxy_url) and "workers.dev" in proxy_url
+
+
+def _worker_urls():
+    return [u for u in _proxy_url() if _is_worker_url(u)]
 
 
 def _describe_raw_error(err):
@@ -92,8 +96,9 @@ def _describe_raw_error(err):
 
 
 def _build_proxy_config():
-    proxy_url = _proxy_url()
-    if not proxy_url or _is_worker_url(proxy_url):
+    proxies = [u for u in _proxy_url() if not _is_worker_url(u)]
+    proxy_url = proxies[0] if proxies else None
+    if not proxy_url:
         return None
     from youtube_transcript_api.proxies import GenericProxyConfig
     if proxy_url.startswith("socks"):
@@ -146,8 +151,9 @@ def fetch_transcript_ytdlp(video_id, cookiefile=None):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         },
     }
-    proxy_url = _proxy_url()
-    if proxy_url and not _is_worker_url(proxy_url):
+    proxy_urls = [u for u in _proxy_url() if not _is_worker_url(u)]
+    proxy_url = proxy_urls[0] if proxy_urls else None
+    if proxy_url:
         ydl_opts["proxy"] = proxy_url
     cookies_path = cookiefile or resolve_cookiefile_path()
     if cookies_path and os.path.isfile(cookies_path) and os.path.getsize(cookies_path) > 0:
@@ -233,8 +239,8 @@ def _describe_failure(api_error, yt_error):
     ):
         if os.getenv("TRANSCRIPT_PROXY"):
             return (
-                "YouTube is blocking requests even through the configured proxy. "
-                "Try a different proxy or update your cookies.",
+                "YouTube is blocking requests even through the configured proxies. "
+                "Try different proxies or update your cookies.",
                 "ip_blocked",
             )
         return (
@@ -273,22 +279,25 @@ def _describe_failure(api_error, yt_error):
 
 
 def fetch_transcript_worker(video_id, attempts=3, backoff=2.0):
-    proxy_url = os.getenv("TRANSCRIPT_PROXY", "").rstrip("/")
-    worker_url = f"{proxy_url}?v={video_id}" if proxy_url else None
-    if not worker_url:
+    worker_urls = _worker_urls()
+    if not worker_urls:
         raise Exception("No Worker URL configured")
     last_error = None
-    for attempt in range(1, attempts + 1):
-        try:
-            resp = _requests.get(worker_url, timeout=90)
-            data = resp.json()
-            if data.get("ok") and data.get("text"):
-                return data["text"]
-            last_error = Exception(data.get("error") or "Worker returned no transcript")
-        except Exception as e:
-            last_error = e
-        if attempt < attempts:
-            time.sleep(backoff * attempt)
+    # Rotate across every configured Worker (each has its own egress) before
+    # retrying the same one, so a throttled IP doesn't hard-block /process.
+    order = list(worker_urls)
+    for worker_url in order:
+        for attempt in range(1, attempts + 1):
+            try:
+                resp = _requests.get(f"{worker_url}?v={video_id}", timeout=90)
+                data = resp.json()
+                if data.get("ok") and data.get("text"):
+                    return data["text"]
+                last_error = Exception(data.get("error") or "Worker returned no transcript")
+            except Exception as e:
+                last_error = e
+            if attempt < attempts:
+                time.sleep(backoff * attempt)
     raise last_error or Exception("Worker returned no transcript")
 
 
@@ -301,9 +310,8 @@ def fetch_transcript_invidious(video_id):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     }
-    proxy_url = _proxy_url()
-    if _is_worker_url(proxy_url):
-        proxy_url = None
+    non_worker = [u for u in _proxy_url() if not _is_worker_url(u)]
+    proxy_url = non_worker[0] if non_worker else None
     proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
 
     for instance in INVIDIOUS_INSTANCES:
@@ -352,18 +360,19 @@ def fetch_transcript(video_id):
         resolved_cookie = None
 
     try:
-        proxy_url = _proxy_url()
-        worker_configured = _is_worker_url(proxy_url)
+        proxy_urls = _proxy_url()
+        worker_configured = bool(_worker_urls())
 
-        # Worker mode: try the Cloudflare Worker API first — it returns the
-        # transcript directly and is the intended path when configured.
+        # Worker mode: try the Cloudflare Workers API first (rotating across
+        # each configured Worker) — they return the transcript directly and are
+        # the intended path when configured.
         if worker_configured:
             try:
                 return fetch_transcript_worker(video_id)
             except Exception as e:
                 api_error = e
                 # Fall through to the standard stack (cookies -> yt-dlp ->
-                # Invidious) if the Worker fails, so a broken/unreachable
+                # Invidious) if all Workers fail, so a broken/unreachable
                 # Worker doesn't hard-block processing.
                 return _fetch_via_stack(video_id, resolved_cookie, api_error)
 
@@ -492,7 +501,8 @@ def debug_cookies():
     info["has_openrouter_key"] = bool(os.getenv("OPENROUTER_API_KEY"))
     info["has_transcript_proxy"] = bool(os.getenv("TRANSCRIPT_PROXY"))
     info["transcript_proxy"] = os.getenv("TRANSCRIPT_PROXY", "")
-    info["is_worker_proxy"] = _is_worker_url(os.getenv("TRANSCRIPT_PROXY", ""))
+    info["worker_urls"] = _worker_urls()
+    info["is_worker_proxy"] = bool(_worker_urls())
     info["deploy_marker"] = DEPLOY_MARKER
     if cookie_path and os.path.isfile(cookie_path):
         try:
