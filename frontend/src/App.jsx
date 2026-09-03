@@ -29,8 +29,27 @@ function App() {
   const getProcessError = (err) =>
     friendlyErrors[err.response?.data?.error_code] ||
     err.response?.data?.error ||
-    err.message ||
+    (err.response ? `Server error (${err.response.status}). Please try again.` : err.message) ||
     "Failed to process video. Please check the URL.";
+
+  // The Render backend sits behind Cloudflare and can cold-start (~30s) after
+  // inactivity, during which the browser sees a CORS/network error (no error
+  // body). Retry those transient failures a few times before surfacing.
+  const postWithRetry = async (path, payload, { retries = 3, delay = 1500 } = {}) => {
+    let lastErr;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        return await api.post(path, payload);
+      } catch (err) {
+        lastErr = err;
+        const isServer5xx = err.response && err.response.status >= 500;
+        const isNetworkError = !err.response && (err.message === "Network Error" || err.code === "ERR_NETWORK");
+        if ((!isServer5xx && !isNetworkError) || attempt === retries) throw err;
+        await new Promise((r) => setTimeout(r, delay * attempt));
+      }
+    }
+    throw lastErr;
+  };
 
   const processVideo = async () => {
     if (!url) {
@@ -43,7 +62,7 @@ function App() {
     setAnswer("");
 
     try {
-      const res = await api.post("/process", { url });
+      const res = await postWithRetry("/process", { url });
       setStatus({ type: "success", message: res.data.message || "Video processed successfully!" });
     } catch (err) {
       console.error(err);
@@ -66,7 +85,7 @@ function App() {
     setStatus({ type: "loading", message: "Consulting the AI tutor..." });
 
     try {
-      const res = await api.post("/ask", { question });
+      const res = await postWithRetry("/ask", { question });
       setAnswer(res.data.answer);
       setStatus({ type: "success", message: "Answer generated!" });
     } catch (err) {
