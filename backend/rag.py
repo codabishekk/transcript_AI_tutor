@@ -111,6 +111,19 @@ def _generate_answer(prompt):
     raise last_err
 
 
+# Embedding is done in small batches so a long transcript never holds every
+# embedding in memory at once (free-tier Render is memory-constrained).
+_BATCH_SIZE = 32
+# Hard cap on transcript words: above this, reject gracefully instead of
+# risking an OOM kill that takes the whole backend down.
+_MAX_WORDS = 90000
+
+
+def _embed_batch(batch, model):
+    vectors = list(model.embed(batch))
+    return np.asarray(vectors, dtype="float32")
+
+
 def process_video(url, transcript):
     global qa_state
 
@@ -120,11 +133,31 @@ def process_video(url, transcript):
     with open("transcript.txt", "w", encoding="utf-8") as f:
         f.write(transcript)
 
+    words = transcript.split()
+    if len(words) > _MAX_WORDS:
+        raise ValueError(
+            f"This transcript is too long to process ({len(words)} words). "
+            f"The limit is {_MAX_WORDS} words. Please try a shorter video."
+        )
+
     chunks = _chunk_text(transcript)
     if not chunks:
         raise ValueError("Transcript is empty after chunking")
 
-    embeddings = np.vstack([_embed_text(chunk) for chunk in chunks]).astype("float32")
+    model = _get_model()
+
+    # Embed in batches, accumulating into numpy arrays progressively so peak
+    # memory stays low regardless of transcript length.
+    result_parts = []
+    for i in range(0, len(chunks), _BATCH_SIZE):
+        batch = chunks[i : i + _BATCH_SIZE]
+        batch_vec = _embed_batch(batch, model)
+        result_parts.append(batch_vec)
+
+    if result_parts:
+        embeddings = np.concatenate(result_parts, axis=0).astype("float32")
+    else:
+        embeddings = np.empty((0, 384), dtype="float32")
 
     qa_state = {
         "chunks": chunks,
