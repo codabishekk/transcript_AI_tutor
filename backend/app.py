@@ -23,14 +23,14 @@ from rag import process_video, ask_question
 app = Flask(__name__)
 CORS(app)
 
-DEPLOY_MARKER = "worker-rotate-v9-retry"
+DEPLOY_MARKER = "worker-rotate-v10"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Hard ceiling for /process so it always returns a JSON (CORS-enabled)
 # response before Cloudflare's proxy in front of Render 502s. The gateway
 # gives up well under 30s, so keep this comfortably below that.
-PROCESS_DEADLINE_SECONDS = 18.0
+PROCESS_DEADLINE_SECONDS = 12.0
 
 # Deadline budget shared across the transcript-fetch request (set per request,
 # checked before each slow fallback). Requests longer than this are aborted
@@ -547,7 +547,10 @@ def process():
 
     while attempts < max_attempts:
         attempts += 1
-        remaining = overall_start + 45.0 - time.monotonic()
+        # Keep the whole loop under the Cloudflare gateway (~30s) limit so
+        # /process always returns JSON before it gives up (gunicorn is now set
+        # to 240s, so the gateway is the binding constraint).
+        remaining = overall_start + 25.0 - time.monotonic()
         if remaining <= 0:
             break
         _DEADLINE_AT = time.monotonic() + min(remaining, PROCESS_DEADLINE_SECONDS)
