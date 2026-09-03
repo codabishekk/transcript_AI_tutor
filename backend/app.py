@@ -23,14 +23,14 @@ from rag import process_video, ask_question
 app = Flask(__name__)
 CORS(app)
 
-DEPLOY_MARKER = "worker-rotate-v7"
+DEPLOY_MARKER = "worker-rotate-v8"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Hard ceiling for /process so it always returns a JSON (CORS-enabled)
-# response before Cloudflare's proxy in front of Render 502s. Both the
-# Worker rotation and the cloud-IP fallback stack stay inside this budget.
-PROCESS_DEADLINE_SECONDS = 55.0
+# response before Cloudflare's proxy in front of Render 502s. The gateway
+# gives up well under 30s, so keep this comfortably below that.
+PROCESS_DEADLINE_SECONDS = 18.0
 
 # Deadline budget shared across the transcript-fetch request (set per request,
 # checked before each slow fallback). Requests longer than this are aborted
@@ -325,41 +325,42 @@ def _describe_failure(api_error, yt_error):
     return yt_msg, "unknown"
 
 
-def fetch_transcript_worker(video_id, timeout=30, retries=1, backoff=2.0):
+def fetch_transcript_worker(video_id, timeout=15, retries=1, backoff=1.5):
     worker_urls = _worker_urls()
     if not worker_urls:
         raise Exception("No Worker URL configured")
     last_error = None
+    order = list(worker_urls)
 
-    # Pass 1: try every Worker once. Each has its own YouTube-facing egress,
-    # so an un-throttled IP can return immediately before any backoff.
-    def _try(worker_url):
+    # Fast single scan across every Worker (distinct egresses). Keep the
+    # per-request timeout short and stop the moment the /process deadline is
+    # reached so we never run past the gateway's patience.
+    for worker_url in order:
+        _check_deadline()
+        try:
+            resp = _requests.get(f"{worker_url}?v={video_id}", timeout=timeout)
+        except Exception as e:
+            last_error = e
+            continue
+        try:
+            data = resp.json()
+        except Exception as e:
+            last_error = e
+            continue
+        if data.get("ok") and data.get("text"):
+            return data["text"]
+        last_error = Exception(data.get("error") or "Worker returned no transcript")
+
+    # Pass 2: one brief retry round for IPs that may have recovered.
+    for worker_url in order:
+        _check_deadline()
         try:
             resp = _requests.get(f"{worker_url}?v={video_id}", timeout=timeout)
             data = resp.json()
-            if data.get("ok") and data.get("text"):
-                return data["text"], None
-            return None, Exception(data.get("error") or "Worker returned no transcript")
-        except Exception as e:
-            return None, e
-
-    for worker_url in worker_urls:
-        _check_deadline()
-        text, err = _try(worker_url)
-        if text is not None:
-            return text
-        last_error = err
-
-    # Pass 2: a single retry round across all Workers after a short sleep, so
-    # a temporarily throttled egress that recovers meanwhile is still used.
-    for attempt in range(1, retries + 1):
-        time.sleep(backoff * attempt)
-        for worker_url in worker_urls:
-            _check_deadline()
-            text, err = _try(worker_url)
-            if text is not None:
-                return text
-            last_error = err
+        except Exception:
+            continue
+        if data.get("ok") and data.get("text"):
+            return data["text"]
 
     _check_deadline()
     raise last_error or Exception("Worker returned no transcript")
