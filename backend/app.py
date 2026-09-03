@@ -23,9 +23,19 @@ from rag import process_video, ask_question
 app = Flask(__name__)
 CORS(app)
 
-DEPLOY_MARKER = "worker-rotate-v6"
+DEPLOY_MARKER = "worker-rotate-v7"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Hard ceiling for /process so it always returns a JSON (CORS-enabled)
+# response before Cloudflare's proxy in front of Render 502s. Both the
+# Worker rotation and the cloud-IP fallback stack stay inside this budget.
+PROCESS_DEADLINE_SECONDS = 55.0
+
+# Deadline budget shared across the transcript-fetch request (set per request,
+# checked before each slow fallback). Requests longer than this are aborted
+# with a friendly timed_out error instead of a proxy 502.
+_DEADLINE_AT = None
 
 
 def extract_video_id(url):
@@ -247,6 +257,14 @@ class TranscriptFetchError(Exception):
         self.code = code
 
 
+def _check_deadline():
+    if _DEADLINE_AT is not None and time.monotonic() > _DEADLINE_AT:
+        raise TranscriptFetchError(
+            "Fetching the transcript took too long. Please try again later.",
+            "timed_out",
+        )
+
+
 def _cookies_configured():
     if os.getenv("YT_DLP_COOKIES_BASE64") or os.getenv("YT_DLP_COOKIES_TEXT"):
         return True
@@ -413,6 +431,7 @@ def fetch_transcript(video_id):
                 # Fall through to the standard stack (cookies -> yt-dlp ->
                 # Invidious) if all Workers fail, so a broken/unreachable
                 # Worker doesn't hard-block processing.
+                _check_deadline()
                 return _fetch_via_stack(video_id, resolved_cookie, api_error)
 
         # Try youtube-transcript-api with the plain ANDROID client (no
@@ -420,12 +439,14 @@ def fetch_transcript(video_id):
         # bot-check, while the anonymous client often succeeds.
         api_error = None
         try:
+            _check_deadline()
             return fetch_transcript_api(video_id, cookiefile=None)
         except Exception as e:
             api_error = e
 
         if resolved_cookie:
             try:
+                _check_deadline()
                 return fetch_transcript_api(video_id, cookiefile=resolved_cookie)
             except Exception as e:
                 api_error = e
@@ -433,16 +454,19 @@ def fetch_transcript(video_id):
         # Fall back to yt-dlp with cookies for restricted videos
         yt_error = None
         try:
+            _check_deadline()
             return fetch_transcript_ytdlp(video_id, cookiefile=resolved_cookie)
         except Exception as e:
             yt_error = e
 
         # Fall back to Invidious API (bypasses IP blocks via third-party proxies)
         try:
+            _check_deadline()
             return fetch_transcript_invidious(video_id)
         except Exception:
             pass
 
+        _check_deadline()
         message, code = _describe_failure(api_error, yt_error)
         raise TranscriptFetchError(message, code) from yt_error
     finally:
