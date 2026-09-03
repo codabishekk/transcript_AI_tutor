@@ -23,7 +23,7 @@ from rag import process_video, ask_question
 app = Flask(__name__)
 CORS(app)
 
-DEPLOY_MARKER = "worker-rotate-v8"
+DEPLOY_MARKER = "worker-rotate-v9-retry"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -524,7 +524,6 @@ def _fetch_via_stack(video_id, resolved_cookie, worker_error=None):
 @app.route("/process", methods=["POST"])
 def process():
     global _DEADLINE_AT
-    _DEADLINE_AT = time.monotonic() + PROCESS_DEADLINE_SECONDS
 
     data = request.json
     url = data.get("url")
@@ -532,20 +531,53 @@ def process():
     if not url:
         return jsonify({"error": "YouTube URL is required"}), 400
 
-    try:
-        video_id = extract_video_id(url)
-        transcript = fetch_transcript(video_id)
-    except _DeadlineExceeded:
+    video_id = extract_video_id(url)
+
+    # YouTube throttling of datacenter/Cloudflare IPs is intermittent and often
+    # recovers within a second, so retry transient failures a couple of times
+    # before surfacing an error. A hard overall budget (below the gateway
+    # timeout) guarantees we never hang into a 502 / bogus CORS error.
+    _RETRIABLE = {"timed_out", "ip_blocked"}
+    transcript = None
+    last_code = "unknown"
+    last_msg = "Unknown error"
+    overall_start = time.monotonic()
+    attempts = 0
+    max_attempts = 3
+
+    while attempts < max_attempts:
+        attempts += 1
+        remaining = overall_start + 45.0 - time.monotonic()
+        if remaining <= 0:
+            break
+        _DEADLINE_AT = time.monotonic() + min(remaining, PROCESS_DEADLINE_SECONDS)
+
+        try:
+            transcript = fetch_transcript(video_id)
+            break
+        except _DeadlineExceeded:
+            last_code = "timed_out"
+            last_msg = "Fetching the transcript took too long. Please try again later."
+        except TranscriptFetchError as e:
+            last_code = e.code
+            last_msg = str(e)
+        except Exception as e:
+            last_code = "unknown"
+            last_msg = str(e)
+        finally:
+            _DEADLINE_AT = None
+
+        if last_code not in _RETRIABLE or attempts >= max_attempts:
+            break
+        time.sleep(1.0)
+
+    if transcript is None:
+        if last_code == "timed_out":
+            return jsonify({"error": last_msg, "error_code": "timed_out"}), 504
         return jsonify({
-            "error": "Fetching the transcript took too long. Please try again later.",
-            "error_code": "timed_out",
-        }), 504
-    except TranscriptFetchError as e:
-        return jsonify({"error": f"Failed to fetch transcript: {str(e)}", "error_code": e.code}), 500
-    except Exception as e:
-        return jsonify({"error": f"Failed to fetch transcript: {str(e)}", "error_code": "unknown"}), 500
-    finally:
-        _DEADLINE_AT = None
+            "error": f"Failed to fetch transcript: {last_msg}",
+            "error_code": last_code,
+        }), 500
 
     try:
         process_video(url, transcript)
