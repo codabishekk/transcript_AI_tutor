@@ -1,4 +1,4 @@
-import base64
+﻿import base64
 import os
 import re
 import tempfile
@@ -23,14 +23,14 @@ from rag import process_video, ask_question
 app = Flask(__name__)
 CORS(app)
 
-DEPLOY_MARKER = "worker-rotate-v10"
+DEPLOY_MARKER = "worker-rotate-v11"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Hard ceiling for /process so it always returns a JSON (CORS-enabled)
 # response before Cloudflare's proxy in front of Render 502s. The gateway
 # gives up well under 30s, so keep this comfortably below that.
-PROCESS_DEADLINE_SECONDS = 12.0
+PROCESS_DEADLINE_SECONDS = 8.0
 
 # Deadline budget shared across the transcript-fetch request (set per request,
 # checked before each slow fallback). Requests longer than this are aborted
@@ -429,7 +429,7 @@ def fetch_transcript(video_id):
         worker_configured = bool(_worker_urls())
 
         # Worker mode: try the Cloudflare Workers API first (rotating across
-        # each configured Worker) — they return the transcript directly and are
+        # each configured Worker) â€” they return the transcript directly and are
         # the intended path when configured.
         if worker_configured:
             try:
@@ -443,7 +443,7 @@ def fetch_transcript(video_id):
                 return _fetch_via_stack(video_id, resolved_cookie, api_error)
 
         # Try youtube-transcript-api with the plain ANDROID client (no
-        # cookies) first — stale cookies from cloud IPs can trigger a
+        # cookies) first â€” stale cookies from cloud IPs can trigger a
         # bot-check, while the anonymous client often succeeds.
         api_error = None
         _check_deadline()
@@ -485,7 +485,7 @@ def fetch_transcript(video_id):
 def _fetch_via_stack(video_id, resolved_cookie, worker_error=None):
     """Try the full fallback stack, reporting the most useful error."""
     api_error = None
-    # First try the plain ANDROID client with no cookies — YouTube can
+    # First try the plain ANDROID client with no cookies â€” YouTube can
     # bot-check cookied sessions from cloud IPs, while an anonymous
     # ANDROID client request often still succeeds.
     _check_deadline()
@@ -549,8 +549,9 @@ def process():
         attempts += 1
         # Keep the whole loop under the Cloudflare gateway (~30s) limit so
         # /process always returns JSON before it gives up (gunicorn is now set
-        # to 240s, so the gateway is the binding constraint).
-        remaining = overall_start + 25.0 - time.monotonic()
+        # to 240s, so the gateway is the binding constraint). 22s leaves margin
+        # even when a blocking fallback call overruns its per-attempt deadline.
+        remaining = overall_start + 22.0 - time.monotonic()
         if remaining <= 0:
             break
         _DEADLINE_AT = time.monotonic() + min(remaining, PROCESS_DEADLINE_SECONDS)
