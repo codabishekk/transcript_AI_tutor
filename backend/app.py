@@ -257,12 +257,16 @@ class TranscriptFetchError(Exception):
         self.code = code
 
 
+# Internal signal that the /process deadline elapsed. Raised by the deadline
+# checks and deliberately NOT caught by the broad per-fallback except handlers,
+# so a slow request aborts and returns JSON instead of hanging into a 502.
+class _DeadlineExceeded(Exception):
+    pass
+
+
 def _check_deadline():
     if _DEADLINE_AT is not None and time.monotonic() > _DEADLINE_AT:
-        raise TranscriptFetchError(
-            "Fetching the transcript took too long. Please try again later.",
-            "timed_out",
-        )
+        raise _DeadlineExceeded()
 
 
 def _cookies_configured():
@@ -321,7 +325,7 @@ def _describe_failure(api_error, yt_error):
     return yt_msg, "unknown"
 
 
-def fetch_transcript_worker(video_id, timeout=45, retries=1, backoff=2.0):
+def fetch_transcript_worker(video_id, timeout=30, retries=1, backoff=2.0):
     worker_urls = _worker_urls()
     if not worker_urls:
         raise Exception("No Worker URL configured")
@@ -340,6 +344,7 @@ def fetch_transcript_worker(video_id, timeout=45, retries=1, backoff=2.0):
             return None, e
 
     for worker_url in worker_urls:
+        _check_deadline()
         text, err = _try(worker_url)
         if text is not None:
             return text
@@ -350,11 +355,13 @@ def fetch_transcript_worker(video_id, timeout=45, retries=1, backoff=2.0):
     for attempt in range(1, retries + 1):
         time.sleep(backoff * attempt)
         for worker_url in worker_urls:
+            _check_deadline()
             text, err = _try(worker_url)
             if text is not None:
                 return text
             last_error = err
 
+    _check_deadline()
     raise last_error or Exception("Worker returned no transcript")
 
 
@@ -438,30 +445,30 @@ def fetch_transcript(video_id):
         # cookies) first — stale cookies from cloud IPs can trigger a
         # bot-check, while the anonymous client often succeeds.
         api_error = None
+        _check_deadline()
         try:
-            _check_deadline()
             return fetch_transcript_api(video_id, cookiefile=None)
         except Exception as e:
             api_error = e
 
         if resolved_cookie:
+            _check_deadline()
             try:
-                _check_deadline()
                 return fetch_transcript_api(video_id, cookiefile=resolved_cookie)
             except Exception as e:
                 api_error = e
 
         # Fall back to yt-dlp with cookies for restricted videos
         yt_error = None
+        _check_deadline()
         try:
-            _check_deadline()
             return fetch_transcript_ytdlp(video_id, cookiefile=resolved_cookie)
         except Exception as e:
             yt_error = e
 
         # Fall back to Invidious API (bypasses IP blocks via third-party proxies)
+        _check_deadline()
         try:
-            _check_deadline()
             return fetch_transcript_invidious(video_id)
         except Exception:
             pass
@@ -480,28 +487,33 @@ def _fetch_via_stack(video_id, resolved_cookie, worker_error=None):
     # First try the plain ANDROID client with no cookies — YouTube can
     # bot-check cookied sessions from cloud IPs, while an anonymous
     # ANDROID client request often still succeeds.
+    _check_deadline()
     try:
         return fetch_transcript_api(video_id, cookiefile=None)
     except Exception as e:
         api_error = e
 
     if resolved_cookie:
+        _check_deadline()
         try:
             return fetch_transcript_api(video_id, cookiefile=resolved_cookie)
         except Exception as e:
             api_error = e
 
     yt_error = None
+    _check_deadline()
     try:
         return fetch_transcript_ytdlp(video_id, cookiefile=resolved_cookie)
     except Exception as e:
         yt_error = e
 
+    _check_deadline()
     try:
         return fetch_transcript_invidious(video_id)
     except Exception:
         pass
 
+    _check_deadline()
     if api_error is None and yt_error is None:
         api_error = worker_error
     message, code = _describe_failure(api_error, yt_error)
@@ -510,6 +522,8 @@ def _fetch_via_stack(video_id, resolved_cookie, worker_error=None):
 
 @app.route("/process", methods=["POST"])
 def process():
+    global _DEADLINE_AT
+    _DEADLINE_AT = time.monotonic() + PROCESS_DEADLINE_SECONDS
 
     data = request.json
     url = data.get("url")
@@ -520,10 +534,17 @@ def process():
     try:
         video_id = extract_video_id(url)
         transcript = fetch_transcript(video_id)
+    except _DeadlineExceeded:
+        return jsonify({
+            "error": "Fetching the transcript took too long. Please try again later.",
+            "error_code": "timed_out",
+        }), 504
     except TranscriptFetchError as e:
         return jsonify({"error": f"Failed to fetch transcript: {str(e)}", "error_code": e.code}), 500
     except Exception as e:
         return jsonify({"error": f"Failed to fetch transcript: {str(e)}", "error_code": "unknown"}), 500
+    finally:
+        _DEADLINE_AT = None
 
     try:
         process_video(url, transcript)

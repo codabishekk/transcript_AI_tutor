@@ -23,6 +23,7 @@ function App() {
     auth_required: "This video requires signing in to YouTube to view its transcript.",
     ip_blocked: "YouTube is blocking requests from the server. Try again later.",
     video_unavailable: "This video is unavailable (private, removed, or deleted).",
+    timed_out: "Transcript fetch timed out. Please try again in a moment.",
   };
 
   const getProcessError = (err) =>
