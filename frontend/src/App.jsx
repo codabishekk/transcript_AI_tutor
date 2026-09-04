@@ -1,18 +1,20 @@
-import { useState } from "react";
+import { useRef, useEffect, useState } from "react";
 import axios from "axios";
 
-import Header from "./components/Header";
-import InputSection from "./components/InputSection";
+import ChatMessage from "./components/ChatMessage";
+import Composer from "./components/Composer";
 import StatusToast from "./components/StatusToast";
-import ResultPanel from "./components/ResultPanel";
+
+const URL_PATTERN = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i;
 
 function App() {
-  const [url, setUrl] = useState("");
-  const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState("");
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [isAsking, setIsAsking] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [videoUrl, setVideoUrl] = useState("");
+  const [videoLoaded, setVideoLoaded] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState({ type: "", message: "" });
+  const scrollRef = useRef(null);
 
   const api = axios.create({
     baseURL: import.meta.env.VITE_API_URL || "http://localhost:5000",
@@ -32,9 +34,6 @@ function App() {
     (err.response ? `Server error (${err.response.status}). Please try again.` : err.message) ||
     "Failed to process video. Please check the URL.";
 
-  // The Render backend sits behind Cloudflare and can cold-start (~30s) after
-  // inactivity, during which the browser sees a CORS/network error (no error
-  // body). Retry those transient failures a few times before surfacing.
   const postWithRetry = async (path, payload, { retries = 3, delay = 1500 } = {}) => {
     let lastErr;
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -51,75 +50,158 @@ function App() {
     throw lastErr;
   };
 
-  const processVideo = async () => {
-    if (!url) {
-      setStatus({ type: "error", message: "Please provide a YouTube URL!" });
-      return;
-    }
+  const isYouTubeUrl = (text) => URL_PATTERN.test(text.trim());
 
-    setIsProcessing(true);
+  const addMessage = (role, content) =>
+    setMessages((prev) => [...prev, { role, content }]);
+
+  const processVideo = async (url) => {
+    if (!url) return;
+    setIsLoading(true);
     setStatus({ type: "loading", message: "Extracting transcript and indexing..." });
-    setAnswer("");
-
+    addMessage("user", url);
     try {
       const res = await postWithRetry("/process", { url });
+      setVideoUrl(url);
+      setVideoLoaded(true);
+      addMessage(
+        "assistant",
+        res.data.message || "Video processed. Ask me anything about it!"
+      );
       setStatus({ type: "success", message: res.data.message || "Video processed successfully!" });
     } catch (err) {
       console.error(err);
-      setStatus({
-        type: "error",
-        message: getProcessError(err),
-      });
+      addMessage("assistant", "⚠ " + getProcessError(err));
+      setStatus({ type: "error", message: getProcessError(err) });
     } finally {
-      setIsProcessing(false);
+      setIsLoading(false);
     }
   };
 
-  const askQuestion = async () => {
-    if (!question) {
-      setStatus({ type: "error", message: "What would you like to know?" });
-      return;
-    }
-
-    setIsAsking(true);
+  const askQuestion = async (question) => {
+    setIsLoading(true);
     setStatus({ type: "loading", message: "Consulting the AI tutor..." });
-
+    addMessage("user", question);
     try {
       const res = await postWithRetry("/ask", { question });
-      setAnswer(res.data.answer);
+      addMessage("assistant", res.data.answer);
       setStatus({ type: "success", message: "Answer generated!" });
     } catch (err) {
       console.error(err);
-      setStatus({
-        type: "error",
-        message: err.response?.data?.error || "Failed to get an answer. Is the video processed?",
-      });
+      const msg = err.response?.data?.error || "Failed to get an answer. Is the video processed?";
+      addMessage("assistant", "⚠ " + msg);
+      setStatus({ type: "error", message: msg });
     } finally {
-      setIsAsking(false);
+      setIsLoading(false);
     }
   };
 
+  const handleSend = () => {
+    const text = input.trim();
+    if (!text || isLoading) return;
+    setInput("");
+
+    if (!videoLoaded) {
+      if (isYouTubeUrl(text)) {
+        processVideo(text);
+      } else {
+        setStatus({
+          type: "error",
+          message: "Paste a YouTube link first so I can load the video's transcript.",
+        });
+      }
+      return;
+    }
+
+    if (isYouTubeUrl(text)) {
+      processVideo(text);
+    } else {
+      askQuestion(text);
+    }
+  };
+
+  const newChat = () => {
+    setMessages([]);
+    setInput("");
+    setVideoUrl("");
+    setVideoLoaded(false);
+    setStatus({ type: "", message: "" });
+  };
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, isLoading]);
+
+  const hasStarted = messages.length > 0 || isLoading;
+
   return (
-    <>
-      <div className="orb orb--1" aria-hidden="true" />
-      <div className="orb orb--2" aria-hidden="true" />
-      <div className="orb orb--3" aria-hidden="true" />
-      <div className="app-container">
-        <Header />
-        <InputSection
-          url={url}
-          setUrl={setUrl}
-          question={question}
-          setQuestion={setQuestion}
-          processVideo={processVideo}
-          askQuestion={askQuestion}
-          isProcessing={isProcessing}
-          isAsking={isAsking}
-        />
-        <StatusToast type={status.type} message={status.message} />
-        <ResultPanel answer={answer} />
-      </div>
-    </>
+    <div className="chat-app">
+      <main className="chat-main">
+        <header className="chat-topbar">
+          <div className="chat-topbar__brand">
+            <span className="chat-topbar__logo">✦</span>
+            <span>YouTube Tutor</span>
+          </div>
+          <button className="chat-topbar__new" onClick={newChat}>
+            <span>+</span> New chat
+          </button>
+        </header>
+        {!hasStarted ? (
+          <div className="welcome">
+            <div className="welcome__brand">
+              <div className="welcome__logo">✦</div>
+              <h1>YouTube Tutor</h1>
+              <p>Paste a YouTube link below, then ask anything about the video.</p>
+            </div>
+            <div className="welcome__composer">
+              <Composer
+                value={input}
+                onChange={setInput}
+                onSend={handleSend}
+                disabled={isLoading}
+                placeholder="Paste a YouTube link to start…"
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="chat-scroll" ref={scrollRef}>
+            <div className="chat-thread">
+              {!videoLoaded && videoUrl && (
+                <div className="video-banner">⬆ Currently loading: {videoUrl}</div>
+              )}
+              {messages.map((m, i) => (
+                <ChatMessage key={i} role={m.role} content={m.content} />
+              ))}
+              {isLoading && (
+                <div className="message message--assistant">
+                  <div className="dots">
+                    <span></span><span></span><span></span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {hasStarted && (
+          <div className="chat-composer">
+            {status.message && <StatusToast type={status.type} message={status.message} />}
+            <Composer
+              value={input}
+              onChange={setInput}
+              onSend={handleSend}
+              disabled={isLoading}
+              placeholder={videoLoaded ? "Ask about the video…" : "Paste a YouTube link…"}
+            />
+            {videoLoaded && (
+              <div className="chat-composer__foot">Source video is loaded and ready to answer.</div>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
   );
 }
 
